@@ -1,27 +1,26 @@
 #pragma once
 // ─────────────────────────────────────────────
-// seam::protocol::Group
+// seam::protocol::caps::Caps
 //
-// Models a GROUP block from a SEAM CAPS response.
+// Models the CAPS block from a SEAM CAPS response.
+// Top-level device capability description.
 // ─────────────────────────────────────────────
 
 #include <string>
 #include <vector>
-#include "Param.h"
-#include "Action.h"
-#include "Stream.h"
+#include "Group.h"
 
 namespace seam {
 namespace protocol {
+namespace caps {
 
-struct Group {
-    std::string          id;
-    std::string          label;
-    std::string          enabled_expr;  // CEL expression, empty = always enabled
-    std::vector<Param>   params;
-    std::vector<Action>  actions;
-    std::vector<Stream>  streams;
+struct Caps {
+    std::string        device_type;
+    std::string        device_name;
+    std::string        version;
+    std::vector<Group> groups;
 };
 
+} // namespace caps
 } // namespace protocol
 } // namespace seam

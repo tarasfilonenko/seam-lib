@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 #include <variant>
-#include "Caps.h"
+#include "../caps/Caps.h"
 
 namespace seam {
 namespace protocol {
@@ -30,7 +30,7 @@ enum class EventType {
 // ── Payloads ──────────────────────────────────
 
 struct CapsReadyPayload {
-    Caps caps;
+    caps::Caps caps;
 };
 
 struct ValueReceivedPayload {

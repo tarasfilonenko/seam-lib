@@ -1,10 +1,13 @@
 #pragma once
 // ─────────────────────────────────────────────
-// seam::protocol — single include
+// seam::protocol::caps — single include
 //
-// Include this header to get all SEAM protocol types,
-// both capability definitions and wire data types.
+// Include this header to get all SEAM CAPS definition types.
 // ─────────────────────────────────────────────
 
-#include "caps/types.h"
-#include "wire/types.h"
+#include "Arg.h"
+#include "Param.h"
+#include "Action.h"
+#include "Stream.h"
+#include "Group.h"
+#include "Caps.h"

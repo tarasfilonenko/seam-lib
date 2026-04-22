@@ -1,23 +1,28 @@
 #pragma once
 // ─────────────────────────────────────────────
-// seam::protocol::Caps
+// seam::protocol::wire::In
 //
-// Models the CAPS block from a SEAM CAPS response.
+// Models an IN frame within a DO command.
+// Carries a named argument value as raw bytes.
+//
+// Wire format:
+//   IN <id> <length>\r\n
+//   <data>\r\n
 // ─────────────────────────────────────────────
 
 #include <string>
 #include <vector>
-#include "Group.h"
+#include <cstdint>
 
 namespace seam {
 namespace protocol {
+namespace wire {
 
-struct Caps {
-    std::string        device_type;
-    std::string        device_name;
-    std::string        version;
-    std::vector<Group> groups;
+struct In {
+    std::string          id;
+    std::vector<uint8_t> data;
 };
 
+} // namespace wire
 } // namespace protocol
 } // namespace seam
