@@ -6,6 +6,8 @@
 #include "rtos/ValueQueue.h"
 #include "rtos/RingBuffer.h"
 
+#include "protocol/protocol.h"
+
 using namespace seam::rtos;
 
 // dummy types
