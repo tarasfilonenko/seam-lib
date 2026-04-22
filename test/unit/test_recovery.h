@@ -1,107 +1,70 @@
 #pragma once
-// ─────────────────────────────────────────────
-// test_recovery.h — error recovery tests
-// ─────────────────────────────────────────────
+#include <AUnit.h>
 
-void runRecoveryTests() {
-    Serial.println("-- recovery --");
+test(recovery_parse_error) {
+    Parser p;
+    p.feed(reinterpret_cast<const uint8_t*>("GARBAGE\r\n"), 9);
+    auto ev1 = p.takeEvent();
+    assertTrue(ev1.has_value());
+    assertEqual((int)EventType::PARSE_ERROR, (int)ev1->type);
+    p.feed(reinterpret_cast<const uint8_t*>("OK\r\n"), 4);
+    auto ev2 = p.takeEvent();
+    assertTrue(ev2.has_value());
+    assertEqual((int)EventType::CMD_OK, (int)ev2->type);
+}
 
-    // parser works after PARSE_ERROR
+test(recovery_mid_caps_error) {
+    Parser p;
     {
-        Parser p;
-
-        // first — trigger a parse error
-        p.feed(reinterpret_cast<const uint8_t*>("GARBAGE\r\n"), 9);
-        auto ev1 = p.takeEvent();
-        check("recovery_error_emitted",
-            ev1 && ev1->type == EventType::PARSE_ERROR,
-            "expected PARSE_ERROR");
-
-        // then — valid command works
-        p.feed(reinterpret_cast<const uint8_t*>("OK\r\n"), 4);
-        auto ev2 = p.takeEvent();
-        check("recovery_ok_after_error",
-            ev2 && ev2->type == EventType::CMD_OK,
-            "expected CMD_OK after recovery");
+        const char* s = "CAPS BEGIN\r\ntype:test\r\nGARBAGE\r\n";
+        p.feed(reinterpret_cast<const uint8_t*>(s), strlen(s));
     }
+    auto ev1 = p.takeEvent();
+    assertTrue(ev1.has_value());
+    assertEqual((int)EventType::PARSE_ERROR, (int)ev1->type);
+    auto ev2 = feedAndTake(p,
+        "CAPS BEGIN\r\n"
+        "type:servo_tester\r\n"
+        "name:Servo Tester\r\n"
+        "version:1.0.0\r\n"
+        "GROUP BEGIN g\r\nlabel:G\r\n"
+        "GROUP END\r\n"
+        "CAPS END\r\n");
+    assertTrue(ev2.has_value());
+    assertEqual((int)EventType::CAPS_READY, (int)ev2->type);
+    auto* pl = ev2 ? std::get_if<CapsReadyPayload>(&ev2->payload) : nullptr;
+    assertTrue(pl != nullptr);
+    assertEqual("servo_tester", pl->caps.device_type.c_str());
+}
 
-    // parse error mid-CAPS resets — next CAPS parses cleanly
+test(recovery_manual_reset) {
+    Parser p;
     {
-        Parser p;
-
-        // start a CAPS block then inject garbage
-        {
-            const char* s = "CAPS BEGIN\r\ntype:test\r\nGARBAGE\r\n";
-            p.feed(reinterpret_cast<const uint8_t*>(s), strlen(s));
-        }
-
-        auto ev1 = p.takeEvent();
-        check("recovery_mid_caps_error",
-            ev1 && ev1->type == EventType::PARSE_ERROR,
-            "expected PARSE_ERROR mid-CAPS");
-
-        // fresh CAPS after reset
-        auto ev2 = feedAndTake(p,
-            "CAPS BEGIN\r\n"
-            "type:servo_tester\r\n"
-            "name:Servo Tester\r\n"
-            "version:1.0.0\r\n"
-            "GROUP BEGIN g\r\nlabel:G\r\n"
-            "GROUP END\r\n"
-            "CAPS END\r\n");
-
-        check("recovery_caps_after_reset",
-            ev2 && ev2->type == EventType::CAPS_READY,
-            "expected CAPS_READY after reset");
-        auto* pl = ev2 ? std::get_if<CapsReadyPayload>(&ev2->payload) : nullptr;
-        checkEqual<std::string>("recovery_caps_device_type", "servo_tester",
-            pl ? pl->caps.device_type : "");
+        const char* s = "CAPS BEGIN\r\ntype:test\r\n";
+        p.feed(reinterpret_cast<const uint8_t*>(s), strlen(s));
     }
+    p.reset();
+    auto ev = feedAndTake(p, "OK done\r\n");
+    assertTrue(ev.has_value());
+    assertEqual((int)EventType::CMD_OK, (int)ev->type);
+    auto* pl = std::get_if<OkPayload>(&ev->payload);
+    assertTrue(pl != nullptr);
+    assertEqual("done", pl->text.c_str());
+}
 
-    // reset() clears all state
-    {
-        Parser p;
-
-        // start a CAPS parse
-        p.feed(reinterpret_cast<const uint8_t*>(
-            "CAPS BEGIN\r\n"
-            "type:test\r\n"), 22);
-
-        // manually reset
-        p.reset();
-
-        // parser should be back in IDLE
-        // a valid OK should work immediately
-        auto ev = feedAndTake(p, "OK done\r\n");
-        check("recovery_reset_clears_state",
-            ev && ev->type == EventType::CMD_OK,
-            "expected CMD_OK after manual reset");
-        auto* pl = ev ? std::get_if<OkPayload>(&ev->payload) : nullptr;
-        checkEqual<std::string>("recovery_reset_ok_text", "done", pl ? pl->text : "");
-    }
-
-    // multiple events in one feed() call
-    {
-        Parser p;
-        auto input =
-            std::string("CHANGED a\r\n") +
-            std::string("CHANGED b\r\n") +
-            std::string("OK\r\n");
-
-        p.feed(reinterpret_cast<const uint8_t*>(input.c_str()), input.size());
-
-        auto ev1 = p.takeEvent();
-        auto ev2 = p.takeEvent();
-        auto ev3 = p.takeEvent();
-
-        check("recovery_multi_event_1",
-            ev1 && ev1->type == EventType::CHANGED,
-            "expected first CHANGED");
-        check("recovery_multi_event_2",
-            ev2 && ev2->type == EventType::CHANGED,
-            "expected second CHANGED");
-        check("recovery_multi_event_3",
-            ev3 && ev3->type == EventType::CMD_OK,
-            "expected CMD_OK");
-    }
+test(recovery_multi_event) {
+    Parser p;
+    auto input = std::string("CHANGED a\r\n") +
+                 std::string("CHANGED b\r\n") +
+                 std::string("OK\r\n");
+    p.feed(reinterpret_cast<const uint8_t*>(input.c_str()), input.size());
+    auto ev1 = p.takeEvent();
+    auto ev2 = p.takeEvent();
+    auto ev3 = p.takeEvent();
+    assertTrue(ev1.has_value());
+    assertEqual((int)EventType::CHANGED, (int)ev1->type);
+    assertTrue(ev2.has_value());
+    assertEqual((int)EventType::CHANGED, (int)ev2->type);
+    assertTrue(ev3.has_value());
+    assertEqual((int)EventType::CMD_OK, (int)ev3->type);
 }
