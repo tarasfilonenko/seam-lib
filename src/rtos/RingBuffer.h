@@ -72,8 +72,8 @@ public:
     explicit RingBuffer(size_t size) {
         _handle = xRingbufferCreate(size, RINGBUF_TYPE_BYTEBUF);
         configASSERT(_handle != nullptr);
-        _writer.emplace(_handle);
-        _reader.emplace(_handle);
+        _writer = Writer(_handle);
+        _reader = Reader(_handle);
     }
 
     ~RingBuffer() {

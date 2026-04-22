@@ -68,8 +68,8 @@ public:
     explicit OwningQueue(size_t depth) {
         _handle = xQueueCreate(depth, sizeof(T*));
         configASSERT(_handle != nullptr);
-        _writer.emplace(_handle);
-        _reader.emplace(_handle);
+        _writer = Writer(_handle);
+        _reader = Reader(_handle);
     }
 
     ~OwningQueue() {
