@@ -34,6 +34,7 @@ def main():
             # wait for board reset after upload
             time.sleep(2)
             ser.reset_input_buffer()
+            ser.write(b"start\n")
 
             deadline = time.time() + args.timeout
 

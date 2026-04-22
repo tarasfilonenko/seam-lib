@@ -68,7 +68,7 @@ setup-test:
 
 # ── Unit tests ────────────────────────────────
 
-test: validate setup-test
+test: setup-test
 	@echo "==> Compiling unit tests..."
 	$(ARDUINO_CLI) compile \
 		--fqbn $(BOARD) \

@@ -108,6 +108,14 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
+    while (true) {
+        if (Serial.available()) {
+            String cmd = Serial.readStringUntil('\n');
+            cmd.trim();
+            if (cmd == "start") break;
+        }
+    }
+
     Serial.println("==> seam-lib unit tests");
 
     runParserTests();
