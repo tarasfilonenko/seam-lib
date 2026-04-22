@@ -2,7 +2,6 @@
 # Makefile — seam-lib
 # ─────────────────────────────────────────────
 
-BOARD       = esp32:esp32:esp32s3
 SKETCH      = test/validate/validate.ino
 TEST_SKETCH = test/unit/unit.ino
 TEST_BAUD   = 115200
@@ -11,18 +10,20 @@ TEST_TIMEOUT = 10
 ARDUINO_CLI = arduino-cli
 PYTHON      = python3
 
-# PORT can be overridden: make test TEST_PORT=/dev/cu.usbmodem101
-TEST_PORT  ?= $(shell $(ARDUINO_CLI) board list 2>/dev/null \
-                | grep -i "esp32" \
-                | awk '{print $$1}' \
-                | head -1)
+# Auto-detect board by FQBN pattern; override with BOARD=, CORE=, TEST_PORT=
+_ACTIVE     := $(shell $(ARDUINO_CLI) board list 2>/dev/null | grep -E '[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+' | head -1)
+
+TEST_PORT   ?= $(firstword $(_ACTIVE))
+BOARD       ?= $(shell echo "$(_ACTIVE)" | grep -oE '[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+' | head -1)
+CORE        ?= $(shell echo "$(BOARD)" | cut -d: -f1-2)
+CXX_STD     ?= $(if $(filter esp32:%,$(CORE)),gnu++23,gnu++17)
 
 .PHONY: install validate setup-test test clean
 
 # ── Install core ──────────────────────────────
 
 install:
-	$(ARDUINO_CLI) core install esp32:esp32
+	$(ARDUINO_CLI) core install $(CORE)
 
 # ── Compile validation ────────────────────────
 
@@ -51,15 +52,16 @@ setup-test:
 		 $(PYTHON) -m pip install pyserial --quiet)
 	@echo "    pyserial: ok"
 
-	@echo "==> Installing ESP32 core..."
-	@$(ARDUINO_CLI) core install esp32:esp32 2>/dev/null
-	@echo "    esp32 core: ok"
+	@echo "==> Installing $(CORE) core..."
+	@$(ARDUINO_CLI) core install $(CORE) 2>/dev/null
+	@echo "    $(CORE) core: ok"
 
 	@echo "==> Discovering connected boards..."
 	@$(ARDUINO_CLI) board list
 	@test -n "$(TEST_PORT)" || \
-		(echo "ERROR: no ESP32 board detected. Connect a board or set TEST_PORT manually." && exit 1)
-	@echo "    port: $(TEST_PORT)"
+		(echo "ERROR: no supported board detected. Connect an ESP32 or Seeeduino XIAO, or set TEST_PORT and BOARD manually." && exit 1)
+	@echo "    board: $(BOARD)"
+	@echo "    port:  $(TEST_PORT)"
 
 	@echo ""
 	@echo "Test environment ready. Run 'make test' to execute unit tests."
