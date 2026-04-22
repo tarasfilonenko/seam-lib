@@ -19,6 +19,7 @@ enum class EventType {
     VALUE_RECEIVED,
     CHANGED,
     STREAM_DATA,
+    PARSE_ERROR,
 };
 
 struct CapsReadyPayload {
@@ -27,16 +28,16 @@ struct CapsReadyPayload {
 
 struct OkPayload {
     std::string id;
-    std::string text;   // optional trailing text
+    std::string text;
 };
 
 struct ErrPayload {
     std::string          code;
     std::string          id;
     std::string          message;
-    std::vector<uint8_t> min;     // OUT_OF_RANGE only
-    std::vector<uint8_t> max;     // OUT_OF_RANGE only
-    std::string          missing; // BAD_ARGS only
+    std::vector<uint8_t> min;
+    std::vector<uint8_t> max;
+    std::string          missing;
 };
 
 struct CmdTimeoutPayload {
@@ -57,6 +58,11 @@ struct StreamDataPayload {
     std::vector<uint8_t> data;
 };
 
+struct ParseErrorPayload {
+    std::string line;    // line that caused the error
+    std::string reason;  // human readable description
+};
+
 struct Event {
     EventType type;
     std::variant<
@@ -67,7 +73,8 @@ struct Event {
         CmdTimeoutPayload,
         ValueReceivedPayload,
         ChangedPayload,
-        StreamDataPayload
+        StreamDataPayload,
+        ParseErrorPayload
     > payload;
 };
 
