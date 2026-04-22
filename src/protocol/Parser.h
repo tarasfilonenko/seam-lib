@@ -17,7 +17,6 @@
 #include <optional>
 #include <sstream>
 #include <cstdint>
-#include <cstring>
 #include "wire/Event.h"
 #include "caps/Caps.h"
 
@@ -27,6 +26,8 @@ namespace protocol {
 class Parser {
 public:
     Parser() = default;
+
+    // ── Public API ────────────────────────────
 
     void feed(const uint8_t* data, size_t len) {
         for (size_t i = 0; i < len; i++) {
@@ -81,7 +82,9 @@ public:
     }
 
 private:
-    // ── State Machine ─────────────────────────
+    // ── Types ─────────────────────────────────
+
+    using Tokens = std::vector<std::string>;
 
     enum class State {
         IDLE,
@@ -93,6 +96,8 @@ private:
         IN_STREAM,
         IN_ERR,
     };
+
+    // ── State ─────────────────────────────────
 
     State _state = State::IDLE;
 
@@ -129,13 +134,11 @@ private:
 
     std::queue<wire::Event> _events;
 
+    // ── Core Plumbing ─────────────────────────
+
     void emitEvent(wire::Event&& ev) {
         _events.push(std::move(ev));
     }
-
-    // ── Error Handling ────────────────────────
-    // Central failure point — emit PARSE_ERROR then reset.
-    // Adding a new error condition anywhere is one line: fail(line, "reason").
 
     void fail(const std::string& line, const std::string& reason) {
         wire::Event ev;
@@ -147,8 +150,8 @@ private:
 
     // ── Helpers ───────────────────────────────
 
-    static std::vector<std::string> tokenise(const std::string& line) {
-        std::vector<std::string> tokens;
+    static Tokens tokenise(const std::string& line) {
+        Tokens tokens;
         std::istringstream ss(line);
         std::string token;
         while (ss >> token) tokens.push_back(token);
@@ -288,6 +291,273 @@ private:
         }
     }
 
+    // ── State Handlers ────────────────────────
+
+    // Returns true if line was an async notification and consumed
+    bool handleAsync(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "CHANGED") {
+            if (tokens.size() < 2) {
+                fail(line, "CHANGED missing id");
+                return true;
+            }
+            wire::Event ev;
+            ev.type    = wire::EventType::CHANGED;
+            ev.payload = wire::ChangedPayload{ tokens[1] };
+            emitEvent(std::move(ev));
+            return true;
+        }
+
+        if (keyword == "DATA") {
+            if (tokens.size() < 3) {
+                fail(line, "DATA missing id or length");
+                return true;
+            }
+            size_t len = 0;
+            if (!parseSize(tokens[2], len)) {
+                fail(line, "DATA length is not a valid number");
+                return true;
+            }
+            _binary_keyword   = "DATA";
+            _binary_id        = tokens[1];
+            _binary_remaining = len;
+            _binary_buf.clear();
+            _binary_buf.reserve(len);
+            return true;
+        }
+
+        return false;
+    }
+
+    void handleIdle(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "CAPS") {
+            if (tokens.size() < 2 || tokens[1] != "BEGIN") {
+                fail(line, "CAPS missing BEGIN");
+                return;
+            }
+            _caps  = caps::Caps{};
+            _state = State::IN_CAPS;
+        }
+        else if (keyword == "VALUE") {
+            if (tokens.size() < 3) {
+                fail(line, "VALUE missing id or length");
+                return;
+            }
+            size_t len = 0;
+            if (!parseSize(tokens[2], len)) {
+                fail(line, "VALUE length is not a valid number");
+                return;
+            }
+            _binary_keyword   = "VALUE";
+            _binary_id        = tokens[1];
+            _binary_remaining = len;
+            _binary_buf.clear();
+            _binary_buf.reserve(len);
+        }
+        else if (keyword == "OK") {
+            std::string text;
+            for (size_t i = 1; i < tokens.size(); i++) {
+                if (i > 1) text += ' ';
+                text += tokens[i];
+            }
+            wire::Event ev;
+            ev.type    = wire::EventType::CMD_OK;
+            ev.payload = wire::OkPayload{ _pending_id, text };
+            emitEvent(std::move(ev));
+        }
+        else if (keyword == "ERR") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "ERR missing BEGIN or code");
+                return;
+            }
+            _current_err      = wire::ErrPayload{};
+            _current_err.code = tokens[2];
+            _state            = State::IN_ERR;
+        }
+        else {
+            fail(line, "unexpected keyword in IDLE state");
+        }
+    }
+
+    void handleCaps(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "CAPS" && tokens.size() >= 2 && tokens[1] == "END") {
+            wire::Event ev;
+            ev.type    = wire::EventType::CAPS_READY;
+            ev.payload = wire::CapsReadyPayload{ std::move(_caps) };
+            emitEvent(std::move(ev));
+            _state = State::IDLE;
+        }
+        else if (keyword == "GROUP") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "GROUP missing BEGIN or id");
+                return;
+            }
+            _current_group    = caps::Group{};
+            _current_group.id = tokens[2];
+            _state            = State::IN_GROUP;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in CAPS block");
+                return;
+            }
+            applyCapsField(key, value);
+        }
+    }
+
+    void handleGroup(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "GROUP" && tokens.size() >= 2 && tokens[1] == "END") {
+            _caps.groups.push_back(std::move(_current_group));
+            _current_group = caps::Group{};
+            _state         = State::IN_CAPS;
+        }
+        else if (keyword == "PARAM") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "PARAM missing BEGIN or id");
+                return;
+            }
+            _current_param    = caps::Param{};
+            _current_param.id = tokens[2];
+            _state            = State::IN_PARAM;
+        }
+        else if (keyword == "ACTION") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "ACTION missing BEGIN or id");
+                return;
+            }
+            _current_action    = caps::Action{};
+            _current_action.id = tokens[2];
+            _state             = State::IN_ACTION;
+        }
+        else if (keyword == "STREAM") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "STREAM missing BEGIN or id");
+                return;
+            }
+            _current_stream    = caps::Stream{};
+            _current_stream.id = tokens[2];
+            _state             = State::IN_STREAM;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in GROUP block");
+                return;
+            }
+            applyGroupField(key, value);
+        }
+    }
+
+    void handleParam(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "PARAM" && tokens.size() >= 2 && tokens[1] == "END") {
+            _current_group.params.push_back(std::move(_current_param));
+            _current_param = caps::Param{};
+            _state         = State::IN_GROUP;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in PARAM block");
+                return;
+            }
+            applyParamField(key, value);
+        }
+    }
+
+    void handleAction(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "ACTION" && tokens.size() >= 2 && tokens[1] == "END") {
+            _current_group.actions.push_back(std::move(_current_action));
+            _current_action = caps::Action{};
+            _state          = State::IN_GROUP;
+        }
+        else if (keyword == "ARG") {
+            if (tokens.size() < 3 || tokens[1] != "BEGIN") {
+                fail(line, "ARG missing BEGIN or id");
+                return;
+            }
+            _current_arg    = caps::Arg{};
+            _current_arg.id = tokens[2];
+            _state          = State::IN_ARG;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in ACTION block");
+                return;
+            }
+            applyActionField(key, value);
+        }
+    }
+
+    void handleArg(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "ARG" && tokens.size() >= 2 && tokens[1] == "END") {
+            _current_action.args.push_back(std::move(_current_arg));
+            _current_arg = caps::Arg{};
+            _state       = State::IN_ACTION;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in ARG block");
+                return;
+            }
+            applyArgField(key, value);
+        }
+    }
+
+    void handleStream(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "STREAM" && tokens.size() >= 2 && tokens[1] == "END") {
+            _current_group.streams.push_back(std::move(_current_stream));
+            _current_stream = caps::Stream{};
+            _state          = State::IN_GROUP;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in STREAM block");
+                return;
+            }
+            applyStreamField(key, value);
+        }
+    }
+
+    void handleErr(const std::string& line, const Tokens& tokens) {
+        const std::string& keyword = tokens[0];
+
+        if (keyword == "ERR" && tokens.size() >= 2 && tokens[1] == "END") {
+            wire::Event ev;
+            ev.type    = wire::EventType::CMD_ERR;
+            ev.payload = std::move(_current_err);
+            emitEvent(std::move(ev));
+            _current_err = wire::ErrPayload{};
+            _state       = State::IDLE;
+        }
+        else {
+            std::string key, value;
+            if (!parseKeyValue(line, key, value)) {
+                fail(line, "expected key:value in ERR block");
+                return;
+            }
+            applyErrField(key, value);
+        }
+    }
+
     // ── Main Line Processor ───────────────────
 
     void processLine(const std::string& line) {
@@ -296,259 +566,17 @@ private:
         auto tokens = tokenise(line);
         if (tokens.empty()) return;
 
-        const std::string& keyword = tokens[0];
-
-        // ── Async notifications ───────────────
-
-        if (keyword == "CHANGED") {
-            if (tokens.size() < 2) {
-                fail(line, "CHANGED missing id");
-                return;
-            }
-            wire::Event ev;
-            ev.type    = wire::EventType::CHANGED;
-            ev.payload = wire::ChangedPayload{ tokens[1] };
-            emitEvent(std::move(ev));
-            return;
-        }
-
-        if (keyword == "DATA") {
-            if (tokens.size() < 3) {
-                fail(line, "DATA missing id or length");
-                return;
-            }
-            size_t len = 0;
-            if (!parseSize(tokens[2], len)) {
-                fail(line, "DATA length is not a valid number");
-                return;
-            }
-            _binary_keyword   = "DATA";
-            _binary_id        = tokens[1];
-            _binary_remaining = len;
-            _binary_buf.clear();
-            _binary_buf.reserve(len);
-            return;
-        }
-
-        // ── State-specific handling ───────────
+        if (handleAsync(line, tokens)) return;
 
         switch (_state) {
-
-            case State::IDLE: {
-                if (keyword == "CAPS" && tokens.size() >= 2 && tokens[1] == "BEGIN") {
-                    _caps  = caps::Caps{};
-                    _state = State::IN_CAPS;
-                }
-                else if (keyword == "VALUE") {
-                    if (tokens.size() < 3) {
-                        fail(line, "VALUE missing id or length");
-                        return;
-                    }
-                    size_t len = 0;
-                    if (!parseSize(tokens[2], len)) {
-                        fail(line, "VALUE length is not a valid number");
-                        return;
-                    }
-                    _binary_keyword   = "VALUE";
-                    _binary_id        = tokens[1];
-                    _binary_remaining = len;
-                    _binary_buf.clear();
-                    _binary_buf.reserve(len);
-                }
-                else if (keyword == "OK") {
-                    std::string text;
-                    for (size_t i = 1; i < tokens.size(); i++) {
-                        if (i > 1) text += ' ';
-                        text += tokens[i];
-                    }
-                    wire::Event ev;
-                    ev.type    = wire::EventType::CMD_OK;
-                    ev.payload = wire::OkPayload{ _pending_id, text };
-                    emitEvent(std::move(ev));
-                }
-                else if (keyword == "ERR") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "ERR missing BEGIN or code");
-                        return;
-                    }
-                    _current_err      = wire::ErrPayload{};
-                    _current_err.code = tokens[2];
-                    _state            = State::IN_ERR;
-                }
-                else {
-                    fail(line, "unexpected keyword in IDLE state");
-                }
-                break;
-            }
-
-            case State::IN_CAPS: {
-                if (keyword == "CAPS" && tokens.size() >= 2 && tokens[1] == "END") {
-                    wire::Event ev;
-                    ev.type    = wire::EventType::CAPS_READY;
-                    ev.payload = wire::CapsReadyPayload{ std::move(_caps) };
-                    emitEvent(std::move(ev));
-                    _state = State::IDLE;
-                }
-                else if (keyword == "GROUP") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "GROUP missing BEGIN or id");
-                        return;
-                    }
-                    _current_group    = caps::Group{};
-                    _current_group.id = tokens[2];
-                    _state            = State::IN_GROUP;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in CAPS block");
-                        return;
-                    }
-                    applyCapsField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_GROUP: {
-                if (keyword == "GROUP" && tokens.size() >= 2 && tokens[1] == "END") {
-                    _caps.groups.push_back(std::move(_current_group));
-                    _current_group = caps::Group{};
-                    _state         = State::IN_CAPS;
-                }
-                else if (keyword == "PARAM") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "PARAM missing BEGIN or id");
-                        return;
-                    }
-                    _current_param    = caps::Param{};
-                    _current_param.id = tokens[2];
-                    _state            = State::IN_PARAM;
-                }
-                else if (keyword == "ACTION") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "ACTION missing BEGIN or id");
-                        return;
-                    }
-                    _current_action    = caps::Action{};
-                    _current_action.id = tokens[2];
-                    _state             = State::IN_ACTION;
-                }
-                else if (keyword == "STREAM") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "STREAM missing BEGIN or id");
-                        return;
-                    }
-                    _current_stream    = caps::Stream{};
-                    _current_stream.id = tokens[2];
-                    _state             = State::IN_STREAM;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in GROUP block");
-                        return;
-                    }
-                    applyGroupField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_PARAM: {
-                if (keyword == "PARAM" && tokens.size() >= 2 && tokens[1] == "END") {
-                    _current_group.params.push_back(std::move(_current_param));
-                    _current_param = caps::Param{};
-                    _state         = State::IN_GROUP;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in PARAM block");
-                        return;
-                    }
-                    applyParamField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_ACTION: {
-                if (keyword == "ACTION" && tokens.size() >= 2 && tokens[1] == "END") {
-                    _current_group.actions.push_back(std::move(_current_action));
-                    _current_action = caps::Action{};
-                    _state          = State::IN_GROUP;
-                }
-                else if (keyword == "ARG") {
-                    if (tokens.size() < 3 || tokens[1] != "BEGIN") {
-                        fail(line, "ARG missing BEGIN or id");
-                        return;
-                    }
-                    _current_arg    = caps::Arg{};
-                    _current_arg.id = tokens[2];
-                    _state          = State::IN_ARG;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in ACTION block");
-                        return;
-                    }
-                    applyActionField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_ARG: {
-                if (keyword == "ARG" && tokens.size() >= 2 && tokens[1] == "END") {
-                    _current_action.args.push_back(std::move(_current_arg));
-                    _current_arg = caps::Arg{};
-                    _state       = State::IN_ACTION;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in ARG block");
-                        return;
-                    }
-                    applyArgField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_STREAM: {
-                if (keyword == "STREAM" && tokens.size() >= 2 && tokens[1] == "END") {
-                    _current_group.streams.push_back(std::move(_current_stream));
-                    _current_stream = caps::Stream{};
-                    _state          = State::IN_GROUP;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in STREAM block");
-                        return;
-                    }
-                    applyStreamField(key, value);
-                }
-                break;
-            }
-
-            case State::IN_ERR: {
-                if (keyword == "ERR" && tokens.size() >= 2 && tokens[1] == "END") {
-                    wire::Event ev;
-                    ev.type    = wire::EventType::CMD_ERR;
-                    ev.payload = std::move(_current_err);
-                    emitEvent(std::move(ev));
-                    _current_err = wire::ErrPayload{};
-                    _state       = State::IDLE;
-                }
-                else {
-                    std::string key, value;
-                    if (!parseKeyValue(line, key, value)) {
-                        fail(line, "expected key:value in ERR block");
-                        return;
-                    }
-                    applyErrField(key, value);
-                }
-                break;
-            }
+            case State::IDLE:      handleIdle(line, tokens);     break;
+            case State::IN_CAPS:   handleCaps(line, tokens);     break;
+            case State::IN_GROUP:  handleGroup(line, tokens);    break;
+            case State::IN_PARAM:  handleParam(line, tokens);    break;
+            case State::IN_ACTION: handleAction(line, tokens);   break;
+            case State::IN_ARG:    handleArg(line, tokens);      break;
+            case State::IN_STREAM: handleStream(line, tokens);   break;
+            case State::IN_ERR:    handleErr(line, tokens);      break;
         }
     }
 };
