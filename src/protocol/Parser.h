@@ -53,11 +53,8 @@ public:
         }
     }
 
-    bool hasEvent() const {
-        return !_events.empty();
-    }
-
-    wire::Event takeEvent() {
+    std::optional<wire::Event> takeEvent() {
+        if (_events.empty()) return std::nullopt;
         wire::Event ev = std::move(_events.front());
         _events.pop();
         return ev;

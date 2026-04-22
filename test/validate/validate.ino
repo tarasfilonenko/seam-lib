@@ -50,8 +50,7 @@ void setup() {
     // parser — feed some bytes and drain events
     const char* sample = "CHANGED some_param\r\n";
     parser.feed(reinterpret_cast<const uint8_t*>(sample), strlen(sample));
-    while (parser.hasEvent()) {
-        auto ev = parser.takeEvent();
+    while (auto ev = parser.takeEvent()) {
         (void)ev;
     }
 
