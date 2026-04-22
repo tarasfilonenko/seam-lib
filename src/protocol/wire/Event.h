@@ -1,36 +1,46 @@
 #pragma once
-// ─────────────────────────────────────────────
-// seam::protocol::SeamEventType
-// seam::protocol::SeamEvent
-//
-// Models protocol events emitted by the protocol layer.
-// Each event type carries only its relevant payload.
-// ─────────────────────────────────────────────
-
 #include <string>
 #include <vector>
 #include <variant>
+#include <cstdint>
 #include "../caps/Caps.h"
 
 namespace seam {
 namespace protocol {
+namespace wire {
 
 enum class EventType {
     CONNECTED,
     DISCONNECTED,
     CAPS_READY,
-    CMD_CONFIRMED,
-    CMD_FAILED,
+    CMD_OK,
+    CMD_ERR,
     CMD_TIMEOUT,
     VALUE_RECEIVED,
     CHANGED,
     STREAM_DATA,
 };
 
-// ── Payloads ──────────────────────────────────
-
 struct CapsReadyPayload {
     caps::Caps caps;
+};
+
+struct OkPayload {
+    std::string id;
+    std::string text;   // optional trailing text
+};
+
+struct ErrPayload {
+    std::string          code;
+    std::string          id;
+    std::string          message;
+    std::vector<uint8_t> min;     // OUT_OF_RANGE only
+    std::vector<uint8_t> max;     // OUT_OF_RANGE only
+    std::string          missing; // BAD_ARGS only
+};
+
+struct CmdTimeoutPayload {
+    std::string id;
 };
 
 struct ValueReceivedPayload {
@@ -42,39 +52,25 @@ struct ChangedPayload {
     std::string id;
 };
 
-struct CmdConfirmedPayload {
-    std::string id;
-};
-
-struct CmdFailedPayload {
-    std::string id;
-    std::string err_code;
-};
-
-struct CmdTimeoutPayload {
-    std::string id;
-};
-
 struct StreamDataPayload {
     std::string          id;
     std::vector<uint8_t> data;
 };
 
-// ── Event ─────────────────────────────────────
-
 struct Event {
     EventType type;
     std::variant<
-        std::monostate,       // CONNECTED, DISCONNECTED — no payload
+        std::monostate,
         CapsReadyPayload,
+        OkPayload,
+        ErrPayload,
+        CmdTimeoutPayload,
         ValueReceivedPayload,
         ChangedPayload,
-        CmdConfirmedPayload,
-        CmdFailedPayload,
-        CmdTimeoutPayload,
         StreamDataPayload
     > payload;
 };
 
+} // namespace wire
 } // namespace protocol
 } // namespace seam

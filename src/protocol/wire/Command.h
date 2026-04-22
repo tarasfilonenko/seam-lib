@@ -1,16 +1,4 @@
 #pragma once
-// ─────────────────────────────────────────────
-// seam::protocol::wire::Command
-//
-// Models commands sent from controller to protocol layer.
-// Each command type carries only its relevant payload.
-//
-// Wire format:
-//   GET <id>\r\n
-//   SET <id> <length>\r\n<data>\r\n
-//   DO BEGIN <id>\r\n[IN ...]\r\nDO END\r\n
-// ─────────────────────────────────────────────
-
 #include <string>
 #include <vector>
 #include <variant>
@@ -27,8 +15,6 @@ enum class CommandType {
     DO,
 };
 
-// ── Payloads ──────────────────────────────────
-
 struct GetPayload {
     std::string id;
 };
@@ -39,11 +25,9 @@ struct SetPayload {
 };
 
 struct DoPayload {
-    std::string      id;
-    std::vector<In>  args;
+    std::string     id;
+    std::vector<In> args;
 };
-
-// ── Command ───────────────────────────────────
 
 struct Command {
     CommandType type;

@@ -1,38 +1,61 @@
-// Minimal compile validation for seam-lib/src/rtos
-// Instantiates all three classes to force template compilation.
+// Minimal compile validation for seam-lib/src/
+// Instantiates all classes to force template compilation.
 // Not intended to run — compile only.
 
 #include "rtos/OwningQueue.h"
 #include "rtos/ValueQueue.h"
 #include "rtos/RingBuffer.h"
-
 #include "protocol/protocol.h"
+#include "protocol/Parser.h"
 
 using namespace seam::rtos;
 
-// dummy types
-struct MyEvent {
-    int id;
-};
+// ── rtos types ───────────────────────────────
 
-struct MyValue {
-    float x;
-    float y;
-};
+struct MyEvent { int id; };
+struct MyValue { float x; float y; };
 
 OwningQueue<MyEvent> owningQueue(32);
 ValueQueue<MyValue>  valueQueue(16);
 RingBuffer           ringBuffer(4096);
 
+// ── caps types ───────────────────────────────
+
+seam::protocol::caps::Param   param;
+seam::protocol::caps::Arg     arg;
+seam::protocol::caps::Action  action;
+seam::protocol::caps::Stream  stream;
+seam::protocol::caps::Group   group;
+seam::protocol::caps::Caps    caps;
+
+// ── wire types ───────────────────────────────
+
+seam::protocol::wire::In      in;
+seam::protocol::wire::Command command;
+seam::protocol::wire::Event   event;
+
+// ── parser ───────────────────────────────────
+
+seam::protocol::Parser parser;
+
 void setup() {
-    auto writer = owningQueue.takeWriter();
-    auto reader = owningQueue.takeReader();
+    // rtos
+    auto owningWriter = owningQueue.takeWriter();
+    auto owningReader = owningQueue.takeReader();
+    auto valueWriter  = valueQueue.takeWriter();
+    auto valueReader  = valueQueue.takeReader();
+    auto ringWriter   = ringBuffer.takeWriter();
+    auto ringReader   = ringBuffer.takeReader();
 
-    auto vwriter = valueQueue.takeWriter();
-    auto vreader = valueQueue.takeReader();
+    // parser — feed some bytes and drain events
+    const char* sample = "CHANGED some_param\r\n";
+    parser.feed(reinterpret_cast<const uint8_t*>(sample), strlen(sample));
+    while (parser.hasEvent()) {
+        auto ev = parser.takeEvent();
+        (void)ev;
+    }
 
-    auto rwriter = ringBuffer.takeWriter();
-    auto rreader = ringBuffer.takeReader();
+    parser.reset();
 }
 
 void loop() {}
