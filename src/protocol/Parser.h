@@ -140,12 +140,12 @@ private:
         _events.push(std::move(ev));
     }
 
-    void fail(const std::string& line, const std::string& reason) {
+    void fail(std::string line, const std::string& reason) {
+        reset();
         wire::Event ev;
         ev.type    = wire::EventType::PARSE_ERROR;
         ev.payload = wire::ParseErrorPayload{ line, reason };
         emitEvent(std::move(ev));
-        reset();
     }
 
     // ── Helpers ───────────────────────────────

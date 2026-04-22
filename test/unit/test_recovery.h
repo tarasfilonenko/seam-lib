@@ -30,10 +30,10 @@ void runRecoveryTests() {
         Parser p;
 
         // start a CAPS block then inject garbage
-        p.feed(reinterpret_cast<const uint8_t*>(
-            "CAPS BEGIN\r\n"
-            "type:test\r\n"
-            "GARBAGE\r\n"), 34);
+        {
+            const char* s = "CAPS BEGIN\r\ntype:test\r\nGARBAGE\r\n";
+            p.feed(reinterpret_cast<const uint8_t*>(s), strlen(s));
+        }
 
         auto ev1 = p.takeEvent();
         check("recovery_mid_caps_error",
