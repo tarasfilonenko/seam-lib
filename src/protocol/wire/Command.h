@@ -1,4 +1,17 @@
 #pragma once
+// ─────────────────────────────────────────────
+// seam::protocol::wire::Command
+//
+// Models commands sent from controller to protocol layer.
+// Each command type carries only its relevant payload.
+//
+// Wire format:
+//   CAPS\r\n
+//   GET <id>\r\n
+//   SET <id> <length>\r\n<data>\r\n
+//   DO BEGIN <id>\r\n[IN ...]\r\nDO END\r\n
+// ─────────────────────────────────────────────
+
 #include <string>
 #include <vector>
 #include <variant>

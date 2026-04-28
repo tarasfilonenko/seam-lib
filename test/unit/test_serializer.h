@@ -49,7 +49,53 @@ test(serializer_do) {
 
     auto encoded = s.serialize(command);
     assertTrue(encoded.has_value());
-    assertEqual("DO sweep\r\n", toAscii(*encoded).c_str());
+    assertEqual(
+        "DO BEGIN sweep\r\n"
+        "DO END\r\n",
+        toAscii(*encoded).c_str());
+}
+
+test(serializer_do_with_args) {
+    Serializer s;
+    Command command;
+    command.type = CommandType::DO;
+    command.payload = DoPayload{
+        "sweep",
+        {
+            In{ "start_us", std::vector<uint8_t>{ '5', '0', '0' } },
+            In{ "end_us", std::vector<uint8_t>{ '2', '5', '0', '0' } }
+        }
+    };
+
+    auto encoded = s.serialize(command);
+    assertTrue(encoded.has_value());
+    assertEqual(
+        "DO BEGIN sweep\r\n"
+        "IN start_us 3\r\n"
+        "500\r\n"
+        "IN end_us 4\r\n"
+        "2500\r\n"
+        "DO END\r\n",
+        toAscii(*encoded).c_str());
+}
+
+test(serializer_do_with_empty_arg_data) {
+    Serializer s;
+    Command command;
+    command.type = CommandType::DO;
+    command.payload = DoPayload{
+        "reset_offsets",
+        { In{ "reason", {} } }
+    };
+
+    auto encoded = s.serialize(command);
+    assertTrue(encoded.has_value());
+    assertEqual(
+        "DO BEGIN reset_offsets\r\n"
+        "IN reason 0\r\n"
+        "\r\n"
+        "DO END\r\n",
+        toAscii(*encoded).c_str());
 }
 
 test(serializer_rejects_payload_mismatch) {
@@ -57,19 +103,6 @@ test(serializer_rejects_payload_mismatch) {
     Command command;
     command.type = CommandType::GET;
     command.payload = CapsPayload{};
-
-    auto encoded = s.serialize(command);
-    assertFalse(encoded.has_value());
-}
-
-test(serializer_rejects_do_args) {
-    Serializer s;
-    Command command;
-    command.type = CommandType::DO;
-    command.payload = DoPayload{
-        "sweep",
-        { In{ "start_us", std::vector<uint8_t>{ '5', '0', '0' } } }
-    };
 
     auto encoded = s.serialize(command);
     assertFalse(encoded.has_value());

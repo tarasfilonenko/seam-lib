@@ -62,10 +62,22 @@ public:
             case wire::CommandType::DO: {
                 const auto* payload = std::get_if<wire::DoPayload>(&command.payload);
                 if (!payload) return std::nullopt;
-                if (!payload->args.empty()) return std::nullopt;
 
-                appendAscii(message, "DO ");
+                appendAscii(message, "DO BEGIN ");
                 appendAscii(message, payload->id);
+                appendCrlf(message);
+
+                for (const auto& arg : payload->args) {
+                    appendAscii(message, "IN ");
+                    appendAscii(message, arg.id);
+                    message.push_back(' ');
+                    appendAscii(message, std::to_string(arg.data.size()));
+                    appendCrlf(message);
+                    message.insert(message.end(), arg.data.begin(), arg.data.end());
+                    appendCrlf(message);
+                }
+
+                appendAscii(message, "DO END");
                 appendCrlf(message);
                 return message;
             }
