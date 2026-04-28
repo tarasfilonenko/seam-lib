@@ -10,6 +10,7 @@ namespace protocol {
 namespace wire {
 
 enum class EventType {
+    DISCOVERED,
     CONNECTED,
     DISCONNECTED,
     CAPS_READY,

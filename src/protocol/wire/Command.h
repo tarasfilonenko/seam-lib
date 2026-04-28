@@ -10,10 +10,13 @@ namespace protocol {
 namespace wire {
 
 enum class CommandType {
+    CAPS,
     GET,
     SET,
     DO,
 };
+
+struct CapsPayload {};
 
 struct GetPayload {
     std::string id;
@@ -32,6 +35,7 @@ struct DoPayload {
 struct Command {
     CommandType type;
     std::variant <
+        CapsPayload,
         GetPayload,
         SetPayload,
         DoPayload
