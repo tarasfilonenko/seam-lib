@@ -7,6 +7,7 @@
 #include "rtos/RingBuffer.h"
 #include "protocol/protocol.h"
 #include "protocol/Parser.h"
+#include "protocol/Serializer.h"
 
 using namespace seam::rtos;
 
@@ -37,6 +38,7 @@ seam::protocol::wire::Event   event;
 // ── parser ───────────────────────────────────
 
 seam::protocol::Parser parser;
+seam::protocol::Serializer serializer;
 
 void setup() {
     // rtos
@@ -55,6 +57,13 @@ void setup() {
     }
 
     parser.reset();
+
+    command.type = seam::protocol::wire::CommandType::GET;
+    command.payload = seam::protocol::wire::GetPayload{ "some_param" };
+    auto encoded = serializer.serialize(command);
+    if (encoded) {
+        (void)encoded->size();
+    }
 }
 
 void loop() {}

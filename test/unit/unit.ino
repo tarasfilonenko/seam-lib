@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <AUnit.h>
 #include "protocol/Parser.h"
+#include "protocol/Serializer.h"
 #include "protocol/wire/Event.h"
 #include "protocol/caps/Caps.h"
 
@@ -22,6 +23,7 @@ std::optional<wire::Event> feedAndTake(Parser& p, const char* input) {
 // ── Test suites ───────────────────────────────
 
 #include "test_parser.h"
+#include "test_serializer.h"
 #include "test_caps.h"
 #include "test_interleave.h"
 #include "test_recovery.h"
