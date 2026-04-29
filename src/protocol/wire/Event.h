@@ -10,10 +10,6 @@ namespace protocol {
 namespace wire {
 
 enum class EventType {
-    DISCOVERED,
-    CONNECTED,
-    DISCONNECTED,
-    // Events above should be transport layer
     CAPS_READY,
     CMD_OK,
     CMD_ERR,
