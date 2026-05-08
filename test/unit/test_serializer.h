@@ -98,6 +98,38 @@ test(serializer_do_with_empty_arg_data) {
         toAscii(*encoded).c_str());
 }
 
+test(serializer_status) {
+    Serializer s;
+    Command command;
+    command.type = CommandType::STATUS;
+    command.payload = StatusPayload{};
+
+    auto encoded = s.serialize(command);
+    assertTrue(encoded.has_value());
+    assertEqual("STATUS\r\n", toAscii(*encoded).c_str());
+}
+
+test(serializer_watch) {
+    Serializer s;
+    Command command;
+    command.type = CommandType::WATCH;
+    command.payload = WatchPayload{ "schematic" };
+
+    auto encoded = s.serialize(command);
+    assertTrue(encoded.has_value());
+    assertEqual("WATCH schematic\r\n", toAscii(*encoded).c_str());
+}
+
+test(serializer_unwatch) {
+    Serializer s;
+    Command command;
+    command.type = CommandType::UNWATCH;
+    command.payload = UnwatchPayload{ "schematic" };
+
+    auto encoded = s.serialize(command);
+    assertTrue(encoded.has_value());
+    assertEqual("UNWATCH schematic\r\n", toAscii(*encoded).c_str());
+}
 test(serializer_rejects_payload_mismatch) {
     Serializer s;
     Command command;

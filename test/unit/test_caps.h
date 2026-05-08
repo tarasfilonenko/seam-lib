@@ -64,7 +64,7 @@ test(caps_param_fields) {
     assertEqual("p > 0",     param->enabled_expr.c_str());
     assertEqual("p < 200",   param->visible_expr.c_str());
     assertEqual("150",       param->default_val.c_str());
-    assertEqual('r',         param->access);
+    assertEqual(AccessReadWrite.data(), param->access.c_str());
 }
 
 test(caps_action) {

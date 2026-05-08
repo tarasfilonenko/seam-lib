@@ -197,7 +197,7 @@ private:
 
     void applyParamField(const std::string& key, const std::string& value) {
         if      (key == "type")        _current_param.type         = value;
-        else if (key == "access")      _current_param.access       = value.empty() ? 'r' : value[0];
+        else if (key == "access")      _current_param.access       = value.empty() ? std::string(caps::AccessRead) : value;
         else if (key == "label")       _current_param.label        = value;
         else if (key == "description") _current_param.description  = value;
         else if (key == "default")     _current_param.default_val  = value;

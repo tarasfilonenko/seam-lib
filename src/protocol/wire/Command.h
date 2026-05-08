@@ -10,6 +10,9 @@
 //   GET <id>\r\n
 //   SET <id> <length>\r\n<data>\r\n
 //   DO BEGIN <id>\r\n[IN ...]\r\nDO END\r\n
+//   STATUS\r\n
+//   WATCH <id>\r\n
+//   UNWATCH <id>\r\n
 // ─────────────────────────────────────────────
 
 #include <string>
@@ -27,9 +30,13 @@ enum class CommandType {
     GET,
     SET,
     DO,
+    STATUS,
+    WATCH,
+    UNWATCH,
 };
 
 struct CapsPayload {};
+struct StatusPayload {};
 
 struct GetPayload {
     std::string id;
@@ -45,13 +52,24 @@ struct DoPayload {
     std::vector<In> args;
 };
 
+struct WatchPayload {
+    std::string id;
+};
+
+struct UnwatchPayload {
+    std::string id;
+};
+
 struct Command {
     CommandType type;
     std::variant <
         CapsPayload,
+        StatusPayload,
         GetPayload,
         SetPayload,
-        DoPayload
+        DoPayload,
+        WatchPayload,
+        UnwatchPayload
     > payload;
 };
 

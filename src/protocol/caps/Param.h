@@ -8,17 +8,21 @@
 // ─────────────────────────────────────────────
 
 #include <string>
+#include <string_view>
 
 namespace seam {
 namespace protocol {
 namespace caps {
+
+inline constexpr std::string_view AccessRead      = "r";
+inline constexpr std::string_view AccessReadWrite = "rw";
 
 struct Param {
     std::string id;
     std::string label;
     std::string description;
     std::string type;           // MIME type e.g. seam/int, image/png
-    char        access;         // 'r', 'w', 'x' (rw)
+    std::string access;         // AccessRead or AccessReadWrite
     bool        watchable;
     bool        persist;        // host should save and restore on reconnect
     bool        has_min;

@@ -81,6 +81,35 @@ public:
                 appendCrlf(message);
                 return message;
             }
+
+            case wire::CommandType::STATUS: {
+                const auto* payload = std::get_if<wire::StatusPayload>(&command.payload);
+                if (!payload) return std::nullopt;
+
+                appendAscii(message, "STATUS");
+                appendCrlf(message);
+                return message;
+            }
+
+            case wire::CommandType::WATCH: {
+                const auto* payload = std::get_if<wire::WatchPayload>(&command.payload);
+                if (!payload) return std::nullopt;
+
+                appendAscii(message, "WATCH ");
+                appendAscii(message, payload->id);
+                appendCrlf(message);
+                return message;
+            }
+
+            case wire::CommandType::UNWATCH: {
+                const auto* payload = std::get_if<wire::UnwatchPayload>(&command.payload);
+                if (!payload) return std::nullopt;
+
+                appendAscii(message, "UNWATCH ");
+                appendAscii(message, payload->id);
+                appendCrlf(message);
+                return message;
+            }
         }
 
         return std::nullopt;
