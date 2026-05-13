@@ -14,6 +14,18 @@ Reusable C++ primitives for SEAM ecosystem firmware.
 - C++23
 - ESP32 Arduino core v3.x or equivalent
 
+## Running tests on Seeed XIAO ESP32-C6
+
+`arduino-cli` may auto-detect the board as the hidden `esp32:esp32:esp32_family`
+target, which does not compile this test sketch correctly. Use the explicit
+XIAO ESP32-C6 FQBN instead:
+
+```bash
+make test BOARD=esp32:esp32:XIAO_ESP32C6 TEST_PORT=/dev/cu.usbmodem2101
+```
+
+Adjust `TEST_PORT` for your machine as needed.
+
 ## Adding to a project
 
 ```bash
