@@ -39,7 +39,8 @@ or_expr    := and_expr ( "||" and_expr )*
 and_expr   := cmp_expr ( "&&" cmp_expr )*
 cmp_expr   := not_expr ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) not_expr )?
 not_expr   := "!" not_expr | primary
-primary    := number | string | "true" | "false" | identifier | "(" expr ")"
+primary    := number | string | "true" | "false" | identifier | "(" expr ")" | list_lit
+list_lit   := "[" ( expr ( "," expr )* )? "]"
 identifier := bare_id | "@" bare_id
 bare_id    := [A-Za-z_][A-Za-z0-9_]*
 number     := -?[0-9]+("."[0-9]+)?
@@ -56,21 +57,26 @@ reserved for host-provided state (e.g. `@connected`, `@preset_index`).
 The grammar reserves the prefix even though no `@`-vars are emitted yet —
 adding them later won't break older docks.
 
-### `in` operator
+### `in` operator + list literals
 
-`item in container` tests membership against a space-separated token list,
-mirroring how `caps::Param::flags` and `caps::Param::options` already
-encode their values. Both operands must be strings:
+`item in list` tests membership using CEL semantics. The right operand
+must be a List (either a literal `[a, b, c]` or an identifier that
+resolves to a List). Element-wise equality drives membership, using the
+same type-strict rules as `==`:
 
 ```
-"chan_a" in enabled_channels       // enabled_channels = "chan_a chan_b" → true
-"chan_z" in enabled_channels       // → false
-"chan_a" in ""                     // → false (no tokens)
+1 in [1, 2, 3]               // → true
+"x" in ["a", "b"]            // → false
+1 in ["1", "2"]              // → Undefined (every comparison is a type mismatch)
+1 in [1, "x"]                // → true (a match wins over later type errors)
 ```
 
-If either operand is non-string, the result is Undefined. Tokens are
-delimited by runs of ASCII whitespace; leading/trailing whitespace and
-empty tokens are ignored.
+Error absorption: any matching element wins (returns `true`), even if
+earlier element comparisons were `Undefined`. If no element matches and
+at least one comparison was `Undefined`, the result is `Undefined`.
+Otherwise (all defined-false), the result is `false`.
+
+Non-List right operand (string, number, bool, ...) → `Undefined`.
 
 Real modules emit expressions like:
 
@@ -79,8 +85,28 @@ Real modules emit expressions like:
 ```
 
 where `{{CHANNEL_PREFIX}}` is module-side template substitution that
-happens **before** the string reaches cel. cel only sees the final
-result (e.g. `"chan_a" in enabled_channels`).
+happens **before** the string reaches cel, and `enabled_channels`
+resolves (via the host's `Env`) to a List value containing the
+allowed channel identifiers.
+
+### List literals
+
+Lists are written `[expr, expr, ...]`. Empty `[]` is allowed; trailing
+commas are not (`[1, 2,]` is a parse error). Elements are full
+expressions, so list literals nest naturally:
+
+```
+[1, 2, 3]
+["fast", "slow"]
+[gain, max_gain, 0]
+[1 == 1, true, mode == "advanced"]
+[[1, 2], [3, 4]]
+```
+
+List values currently exist primarily to feed the `in` operator. Other
+operations on Lists (`==`, `<`, `!`, etc.) yield `Undefined` — there's
+no recursive list equality or ordering. Expand if a real module needs
+it.
 
 ## Semantics
 

@@ -1,144 +1,213 @@
 #pragma once
 // ─────────────────────────────────────────────
-// test/unit/cel/in — string-token membership operator 'in'
+// test/unit/cel/in — 'in' membership operator
 //
-// `item in container` checks whether `item` (string) appears as one of
-// the whitespace-separated tokens in `container` (string). Matches the
-// SEAM convention for `caps::Param::flags` and `options`.
+// `item in list` returns true if item equals some element of list,
+// using the same type-strict equality rules as ==. Right operand must
+// be a List (non-List → Undefined). CEL-style error absorption:
+//   - any matching element → true (even if earlier comparisons were
+//     Undefined)
+//   - no match found and at least one Undefined comparison → Undefined
+//   - no match found and all comparisons were defined-false → false
 //
-// Type-strict: both operands must be String. Non-string operand →
-// Undefined. Undefined operand → Undefined.
-//
-// 'in' is a keyword operator at the cmp_expr precedence level — same
-// slot as ==, !=, <, etc. (non-chainable).
+// 'in' is a keyword operator at cmp_expr precedence — same slot as ==.
+// Non-chainable; use parens to group (`(a in [1]) == true`).
 // ─────────────────────────────────────────────
 
 #include "helpers.h"
 
-// Happy path
-test(cel_eval_in_single_token_match)   { cel_expect_bool("\"x\" in \"x\"",         true);  }
-test(cel_eval_in_first_token_match)    { cel_expect_bool("\"x\" in \"x y z\"",     true);  }
-test(cel_eval_in_middle_token_match)   { cel_expect_bool("\"y\" in \"x y z\"",     true);  }
-test(cel_eval_in_last_token_match)     { cel_expect_bool("\"z\" in \"x y z\"",     true);  }
-test(cel_eval_in_no_match)             { cel_expect_bool("\"q\" in \"x y z\"",     false); }
-test(cel_eval_in_empty_container)      { cel_expect_bool("\"x\" in \"\"",          false); }
-test(cel_eval_in_empty_item)           { cel_expect_bool("\"\"  in \"x y\"",       false); }
+// Happy path — basic membership
+test(cel_eval_in_int_match_first)  { cel_expect_bool("1 in [1, 2, 3]", true);  }
+test(cel_eval_in_int_match_middle) { cel_expect_bool("2 in [1, 2, 3]", true);  }
+test(cel_eval_in_int_match_last)   { cel_expect_bool("3 in [1, 2, 3]", true);  }
+test(cel_eval_in_int_no_match)     { cel_expect_bool("4 in [1, 2, 3]", false); }
 
-test(cel_eval_in_extra_whitespace_in_container) {
-    // Multiple spaces / tabs / newlines between tokens are all separators.
-    cel_expect_bool("\"x\" in \"  x  y  \"", true);
+test(cel_eval_in_string_match)     { cel_expect_bool("\"a\" in [\"a\", \"b\"]", true);  }
+test(cel_eval_in_string_no_match)  { cel_expect_bool("\"c\" in [\"a\", \"b\"]", false); }
+
+test(cel_eval_in_bool_match)       { cel_expect_bool("true in [true, false]", true);   }
+test(cel_eval_in_bool_no_match)    { cel_expect_bool("false in [true]",       false);  }
+
+// Edge cases
+test(cel_eval_in_singleton_match)  { cel_expect_bool("1 in [1]",     true);  }
+test(cel_eval_in_singleton_miss)   { cel_expect_bool("2 in [1]",     false); }
+test(cel_eval_in_empty_list)       { cel_expect_bool("1 in []",      false); }
+
+test(cel_eval_in_decimal_exact_match) {
+    cel_expect_bool("3.14 in [1.0, 3.14, 2.0]", true);
 }
 
-test(cel_eval_in_tab_separator)  { cel_expect_bool("\"y\" in \"x\\ty\\tz\"", true); }
-test(cel_eval_in_newline_separator) {
-    // CEL source string body contains a literal LF — that's allowed by
-    // the string grammar and tokenises correctly.
-    cel_expect_bool("\"y\" in \"x\\ny\\nz\"", true);
+test(cel_eval_in_with_parens_around_elements) {
+    cel_expect_bool("2 in [(1), (2), (3)]", true);
 }
 
-test(cel_eval_in_multi_token_item_no_match) {
-    // Item is "x y" — not a single token, so doesn't match either "x" or
-    // "y" alone.
-    cel_expect_bool("\"x y\" in \"x y z\"", false);
+test(cel_eval_in_with_expression_elements) {
+    // List elements can be full expressions; each is evaluated before
+    // membership check.
+    cel_expect_bool("true in [1 == 1, 2 == 3]", true);
 }
 
-// Identifier-backed (the realistic shape)
-test(cel_eval_in_with_registry_match) {
+// Type-strict — element-wise equality respects kind
+test(cel_eval_in_number_vs_string_list_all_mismatched_is_undefined) {
+    // 1 == "1" → Undefined for every element; no match found.
+    cel_expect_undefined("1 in [\"1\", \"2\", \"3\"]");
+}
+
+test(cel_eval_in_match_wins_over_type_mismatch) {
+    // First element matches → true, regardless of later type mismatches.
+    cel_expect_bool("1 in [1, \"x\"]", true);
+}
+
+test(cel_eval_in_match_after_type_mismatch) {
+    // First element is a type mismatch (Undef), later match still wins.
+    cel_expect_bool("1 in [\"x\", 1]", true);
+}
+
+test(cel_eval_in_no_match_with_some_mismatch_is_undefined) {
+    // No element equals 1, but some comparisons are Undefined (1 vs
+    // "x"). Undefined propagates.
+    cel_expect_undefined("1 in [\"x\", 2, \"y\"]");
+}
+
+test(cel_eval_in_no_match_all_defined_is_false) {
+    // No matches and every comparison is well-typed → false.
+    cel_expect_bool("99 in [1, 2, 3]", false);
+}
+
+// Right operand must be a List
+test(cel_eval_in_string_rhs_is_undefined) {
+    // The old string-token semantics is gone. `"x" in "a b c"` is a
+    // type error now — the right operand is a String, not a List.
+    cel_expect_undefined("\"x\" in \"a b c\"");
+}
+
+test(cel_eval_in_number_rhs_is_undefined) {
+    cel_expect_undefined("1 in 1");
+}
+
+test(cel_eval_in_bool_rhs_is_undefined) {
+    cel_expect_undefined("\"a\" in true");
+}
+
+// Undefined propagation
+test(cel_eval_in_undefined_lhs) {
+    cel_test::Registry reg{};
+    // Every comparison is `Undefined == elem` → Undefined → saw_undef →
+    // result Undefined.
+    cel_expect_undefined_in("missing in [1, 2, 3]", reg);
+}
+
+test(cel_eval_in_undefined_rhs) {
+    cel_test::Registry reg{};
+    cel_expect_undefined_in("1 in missing", reg);
+}
+
+test(cel_eval_in_undefined_element) {
+    // [missing] is a list of one Undefined value. 1 == Undefined →
+    // Undefined → saw_undef → result Undefined.
+    cel_test::Registry reg{};
+    cel_expect_undefined_in("1 in [missing]", reg);
+}
+
+// Registry-backed: identifier resolves to a list value
+test(cel_eval_in_identifier_resolves_to_list) {
     cel_test::Registry reg{{
-        { "enabled_channels", seam::cel::Value::string("chan_a chan_b chan_c") },
+        { "modes", seam::cel::Value::list({
+            seam::cel::Value::string("fast"),
+            seam::cel::Value::string("slow"),
+        }) },
+    }};
+    cel_expect_bool_in("\"fast\" in modes", reg, true);
+}
+
+test(cel_eval_in_identifier_resolves_to_list_no_match) {
+    cel_test::Registry reg{{
+        { "modes", seam::cel::Value::list({
+            seam::cel::Value::string("fast"),
+            seam::cel::Value::string("slow"),
+        }) },
+    }};
+    cel_expect_bool_in("\"medium\" in modes", reg, false);
+}
+
+test(cel_eval_in_left_identifier) {
+    cel_test::Registry reg{{
+        { "tag", seam::cel::Value::string("blue") },
+    }};
+    cel_expect_bool_in("tag in [\"red\", \"green\", \"blue\"]", reg, true);
+}
+
+// Realistic seam shape — what real modules emit
+test(cel_eval_seam_idiom_channel_membership) {
+    // After module-side template substitution this is what cel sees.
+    cel_test::Registry reg{{
+        { "enabled_channels", seam::cel::Value::list({
+            seam::cel::Value::string("chan_a"),
+            seam::cel::Value::string("chan_b"),
+            seam::cel::Value::string("chan_c"),
+        }) },
     }};
     cel_expect_bool_in("\"chan_a\" in enabled_channels", reg, true);
 }
 
-test(cel_eval_in_with_registry_miss) {
+test(cel_eval_seam_idiom_channel_not_enabled) {
     cel_test::Registry reg{{
-        { "enabled_channels", seam::cel::Value::string("chan_a chan_b chan_c") },
+        { "enabled_channels", seam::cel::Value::list({
+            seam::cel::Value::string("chan_a"),
+            seam::cel::Value::string("chan_b"),
+        }) },
     }};
     cel_expect_bool_in("\"chan_z\" in enabled_channels", reg, false);
 }
 
-test(cel_eval_in_both_identifiers) {
-    cel_test::Registry reg{{
-        { "tag",  seam::cel::Value::string("blue")  },
-        { "tags", seam::cel::Value::string("red green blue") },
-    }};
-    cel_expect_bool_in("tag in tags", reg, true);
-}
-
-// Type-strict — non-string operand → Undefined
-test(cel_eval_in_number_lhs_is_undefined) { cel_expect_undefined("1 in \"1 2 3\""); }
-test(cel_eval_in_number_rhs_is_undefined) { cel_expect_undefined("\"a\" in 5");      }
-test(cel_eval_in_bool_lhs_is_undefined)   { cel_expect_undefined("true in \"true false\""); }
-test(cel_eval_in_bool_rhs_is_undefined)   { cel_expect_undefined("\"a\" in true");   }
-test(cel_eval_in_number_both_is_undefined){ cel_expect_undefined("1 in 1");          }
-
-// Undefined propagation
-test(cel_eval_in_undefined_lhs_is_undefined) {
-    cel_test::Registry reg{};
-    cel_expect_undefined_in("missing in \"x y\"", reg);
-}
-
-test(cel_eval_in_undefined_rhs_is_undefined) {
-    cel_test::Registry reg{};
-    cel_expect_undefined_in("\"x\" in missing", reg);
-}
-
-// Word boundary — 'in' is only a keyword when not followed by [A-Za-z0-9_]
-test(cel_compile_identifier_starting_with_in_succeeds) {
-    // `index` is a plain identifier, not `in` + `dex`.
+// Word boundary — 'in' is still a keyword, identifiers like `index` /
+// `inversion` aren't operators.
+test(cel_compile_identifier_starting_with_in_still_works) {
     auto c = cel_test::compileSrc("index");
     assertTrue(c.ok);
     assertEqual("index", c.expr.references()[0].c_str());
 }
 
-test(cel_eval_in_keyword_against_identifier_like_rhs) {
-    // `x in index` — `index` is the rhs identifier; `in` is the operator.
+test(cel_eval_in_keyword_against_identifier_named_index) {
     cel_test::Registry reg{{
         { "x",     seam::cel::Value::string("a") },
-        { "index", seam::cel::Value::string("a b c") },
+        { "index", seam::cel::Value::list({
+            seam::cel::Value::string("a"),
+            seam::cel::Value::string("b"),
+        }) },
     }};
     cel_expect_bool_in("x in index", reg, true);
 }
 
 test(cel_compile_in_glued_to_identifier_fails) {
-    // `"a" inb` — `in` is not a keyword here because it's followed by a
-    // word-continuation char. `inb` is therefore a fresh identifier, but
-    // it sits unexpectedly after the primary `"a"`.
-    cel_expect_compile_error("\"a\" inb", 4);   // 'i' of "inb"
-}
-
-test(cel_compile_in_followed_by_underscore_fails) {
-    cel_expect_compile_error("\"a\" in_thing", 4);
-}
-
-test(cel_compile_in_followed_by_digit_fails) {
-    cel_expect_compile_error("\"a\" in9", 4);
+    // `[1, 2] inb` — 'in' isn't a keyword here (followed by 'b'); `inb`
+    // is a fresh identifier sitting unexpectedly after the primary list.
+    cel_expect_compile_error("[1, 2] inb", 7);     // 'i' of "inb"
 }
 
 // Combined with other operators
+test(cel_eval_not_around_in) {
+    cel_expect_bool("!(\"z\" in [\"x\", \"y\"])", true);
+}
+
 test(cel_eval_in_combined_with_and) {
     cel_test::Registry reg{{
-        { "tags", seam::cel::Value::string("blue green") },
+        { "modes", seam::cel::Value::list({
+            seam::cel::Value::string("fast"),
+        }) },
     }};
-    cel_expect_bool_in("\"blue\" in tags && true", reg, true);
+    cel_expect_bool_in("\"fast\" in modes && true", reg, true);
 }
 
-test(cel_eval_not_around_in) {
-    // !("z" in "x y") = !false = true
-    cel_expect_bool("!(\"z\" in \"x y\")", true);
+test(cel_eval_or_with_in_pair) {
+    cel_expect_bool("(1 in [1]) || (2 in [3])", true);
 }
 
-test(cel_eval_or_with_in) {
-    cel_expect_bool("\"x\" in \"a b\" || \"x\" in \"x y\"", true);
-}
-
-// References — tracks both operands when they're identifiers
+// References — tracks both identifier operands; literal lhs only refs rhs
 test(cel_compile_in_tracks_both_identifier_operands) {
     auto c = cel_test::compileSrc("a in b");
     assertTrue(c.ok);
     assertEqual((size_t)2, c.expr.references().size());
-    assertEqual("a", c.expr.references()[0].c_str());
-    assertEqual("b", c.expr.references()[1].c_str());
 }
 
 test(cel_compile_in_with_literal_lhs_tracks_only_rhs) {
@@ -148,24 +217,29 @@ test(cel_compile_in_with_literal_lhs_tracks_only_rhs) {
     assertEqual("enabled", c.expr.references()[0].c_str());
 }
 
-// Non-chainable with other cmp ops
+test(cel_compile_in_with_list_literal_tracks_list_elements) {
+    auto c = cel_test::compileSrc("x in [a, b, c]");
+    assertTrue(c.ok);
+    // x, a, b, c — all referenced.
+    assertEqual((size_t)4, c.expr.references().size());
+}
+
+// Non-chainable
 test(cel_compile_eq_then_in_fails) {
-    // `a == b in c` — second cmp op is unexpected (cmp_expr is non-chainable).
-    cel_expect_compile_error("a == b in c", 7);  // 'i' of "in"
+    cel_expect_compile_error("a == b in [c]", 7);  // 'i' of "in"
 }
 
 test(cel_compile_in_then_eq_fails) {
-    cel_expect_compile_error("a in b == c", 7);  // '=' of "=="
+    cel_expect_compile_error("a in [b] == c", 9);  // '=' of "=="
 }
 
 // Malformed
 test(cel_compile_in_missing_rhs_fails) {
-    cel_expect_compile_error("\"a\" in", 6);     // EOF after 'in'
+    cel_expect_compile_error("\"a\" in", 6);
 }
 
-test(cel_compile_in_lhs_only_keyword_position) {
-    // `in "x y"` — `in` at the start is an identifier (no preceding primary
-    // for it to operate on). Parses as Identifier(in), then trailing `"x y"`
-    // errors.
-    cel_expect_compile_error("in \"x y\"", 3);   // '"' of trailing string
+test(cel_compile_in_at_start_is_identifier_then_trailing_fails) {
+    // `in [1]` — 'in' parses as an identifier (no preceding primary);
+    // then `[1]` is unexpected trailing content.
+    cel_expect_compile_error("in [1]", 3);          // '[' of trailing list
 }

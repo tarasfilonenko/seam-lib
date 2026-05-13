@@ -18,10 +18,14 @@
 //                 false  absorbs in &&  → false even if other is Undef/non-bool
 //                 true   absorbs in ||  → true  even if other is Undef/non-bool
 //              Non-absorbing combinations of non-bool / Undefined → Undefined.
-//   - 'in' is string-only: `item in container` where both operands are
-//              String. Container is split on whitespace; returns true if
-//              item appears as one of the tokens. Non-string operand on
-//              either side → Undefined.
+//   - 'in' requires a List on the right (CEL-strict). Element-wise
+//              equality drives membership; one matching element → true,
+//              otherwise Undefined if any per-element comparison was
+//              Undefined, otherwise false. Non-List right operand →
+//              Undefined.
+//   - List literals `[a, b, c]` evaluate each element eagerly. List
+//              values flow naturally through 'in' but aren't otherwise
+//              comparable today (`[1] == [1]` → Undefined).
 //   - The evaluator is total: no exceptions, no UB on bad input. Bad
 //     runtime types collapse to Undefined and callers wrap evaluate()
 //     in tight loops without try/catch overhead.
@@ -39,6 +43,9 @@
 // from any task as long as the Env's lookup() is itself thread-safe.
 // ─────────────────────────────────────────────
 
+#include <memory>
+#include <vector>
+
 #include "Env.h"
 #include "Expression.h"
 #include "Value.h"
@@ -49,25 +56,8 @@ namespace cel {
 
 namespace detail {
 
-// Whitespace-tokenised membership test. Both args are string_views;
-// returns true if `item` appears as one of the whitespace-delimited
-// tokens of `tokens`. Empty `item` never matches (no empty tokens by
-// construction).
-inline bool stringInTokens(std::string_view item, std::string_view tokens) {
-    auto isSpace = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    size_t i = 0;
-    while (i < tokens.size()) {
-        while (i < tokens.size() && isSpace(tokens[i])) ++i;
-        const size_t start = i;
-        while (i < tokens.size() && !isSpace(tokens[i])) ++i;
-        if (i > start && tokens.substr(start, i - start) == item) {
-            return true;
-        }
-    }
-    return false;
-}
+// Forward-decl so evalCmp and evaluateNode can call each other.
+inline Value evaluateNode(const Node *node, const Env &env);
 
 // Evaluate a binary comparison given already-resolved operand Values.
 // Centralises the type-strict rules so the recursive walker stays
@@ -78,7 +68,8 @@ inline Value evalCmp(Node::Kind op, const Value &l, const Value &r) {
     }
 
     // Equality / inequality: same kind required; bool/number/string each
-    // compare with their own ==. Mismatched kinds → Undefined.
+    // compare with their own ==. Mismatched kinds (or List operands,
+    // which we don't support equality for today) → Undefined.
     if (op == Node::Kind::Eq || op == Node::Kind::Neq) {
         if (l.kind() != r.kind()) {
             return Value::undefined();
@@ -88,17 +79,35 @@ inline Value evalCmp(Node::Kind op, const Value &l, const Value &r) {
             case Value::Kind::Bool:   equal = l.asBool()   == r.asBool();   break;
             case Value::Kind::Number: equal = l.asNumber() == r.asNumber(); break;
             case Value::Kind::String: equal = l.asString() == r.asString(); break;
-            default:                  return Value::undefined();   // unreachable
+            default:                  return Value::undefined();   // List, etc.
         }
         return Value::boolean(op == Node::Kind::Eq ? equal : !equal);
     }
 
-    // 'in': string-only, whitespace-tokenised right operand.
+    // 'in': right operand must be a List. Element-wise equality drives
+    // membership. CEL-style error absorption: a single matching element
+    // wins (returns true) regardless of any earlier Undefined comparisons;
+    // otherwise an Undefined comparison along the way propagates if no
+    // match is found.
     if (op == Node::Kind::In) {
-        if (!l.isString() || !r.isString()) {
+        if (!r.isList()) {
             return Value::undefined();
         }
-        return Value::boolean(stringInTokens(l.asString(), r.asString()));
+        auto list = r.asList();
+        if (!list) {
+            return Value::undefined();
+        }
+        bool saw_undef = false;
+        for (const auto &elem : list->items) {
+            const Value eq = evalCmp(Node::Kind::Eq, l, elem);
+            if (eq.isBool() && eq.asBool()) {
+                return Value::boolean(true);
+            }
+            if (eq.isUndefined()) {
+                saw_undef = true;
+            }
+        }
+        return saw_undef ? Value::undefined() : Value::boolean(false);
     }
 
     // Ordering: both must be Number. Anything else → Undefined.
@@ -128,6 +137,17 @@ inline Value evaluateNode(const Node *node, const Env &env) {
         case Node::Kind::LitNumber:  return Value::number(node->num_val);
         case Node::Kind::LitString:  return Value::string(node->str_val);
         case Node::Kind::Identifier: return env.resolve(node->str_val);
+        case Node::Kind::ListLit: {
+            // Evaluate each element eagerly; element Undefined-ness is
+            // preserved (so `unbound in [1, 2]` still returns Undefined
+            // via the In branch — the comparison sees an Undef left).
+            std::vector<Value> items;
+            items.reserve(node->children.size());
+            for (const auto &child : node->children) {
+                items.push_back(evaluateNode(child.get(), env));
+            }
+            return Value::list(std::move(items));
+        }
         case Node::Kind::Not: {
             Value v = evaluateNode(node->lhs.get(), env);
             if (v.isUndefined()) return Value::undefined();

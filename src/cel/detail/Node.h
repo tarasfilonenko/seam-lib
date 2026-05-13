@@ -15,17 +15,19 @@
 // std::variant or class hierarchy. Each kind only uses a subset; the
 // unused fields cost a few bytes per node but keep the grammar code
 // simple as features land. Unary ops use `lhs`; binary ops use both
-// `lhs` and `rhs`.
+// `lhs` and `rhs`; list literals use `children`.
 //
 // Field reuse:
-//   str_val  ─ LitString body OR Identifier name (incl. '@' prefix)
-//   lhs      ─ unary operand (Not) OR binary left operand
-//   rhs      ─ binary right operand (unused for unary)
+//   str_val   ─ LitString body OR Identifier name (incl. '@' prefix)
+//   lhs       ─ unary operand (Not) OR binary left operand
+//   rhs       ─ binary right operand (unused for unary)
+//   children  ─ list literal elements (ListLit only)
 // ─────────────────────────────────────────────
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace seam {
 namespace cel {
@@ -37,6 +39,7 @@ struct Node {
         LitNumber,
         LitString,
         Identifier,
+        ListLit,        // [expr, expr, ...]
         Not,
         // Comparison (binary). Type-strict: see evaluator for rules.
         Eq,     // ==
@@ -49,8 +52,8 @@ struct Node {
         // absorbs in &&, true absorbs in ||.
         And,    // &&
         Or,     // ||
-        // Membership (binary). String-only: lhs in rhs where rhs is
-        // treated as a space-separated token list.
+        // Membership (binary). Right operand must be a List; element-wise
+        // equality determines membership.
         In,     // in
     };
 
@@ -59,8 +62,9 @@ struct Node {
     double      num_val  = 0.0;
     std::string str_val;            // LitString body OR Identifier name
 
-    std::unique_ptr<Node> lhs;      // unary operand (Not) OR binary left
-    std::unique_ptr<Node> rhs;      // binary right (unused for unary)
+    std::unique_ptr<Node>                 lhs;          // unary operand OR binary left
+    std::unique_ptr<Node>                 rhs;          // binary right (unused for unary)
+    std::vector<std::unique_ptr<Node>>    children;     // ListLit elements
 };
 
 } // namespace detail

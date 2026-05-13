@@ -10,7 +10,8 @@
 //   and_expr  := cmp_expr ( "&&" cmp_expr )*
 //   cmp_expr  := not_expr ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) not_expr )?
 //   not_expr  := "!" not_expr | primary
-//   primary   := number | string | "true" | "false" | identifier | "(" expr ")"
+//   primary   := number | string | "true" | "false" | identifier | "(" expr ")" | list_lit
+//   list_lit  := "[" ( expr ( "," expr )* )? "]"
 //   identifier := bare_id | "@" bare_id
 //   bare_id   := /[A-Za-z_][A-Za-z0-9_]*/
 //   number    := /-? [0-9]+ ( "." [0-9]+ )?/
@@ -47,8 +48,11 @@
 //            with error absorption: false absorbs in &&, true absorbs
 //            in ||, anything else with a non-bool operand → Undefined).
 //            && binds tighter than ||.
-//   step 9 ─ membership 'in' (keyword operator at cmp_expr precedence;
-//            string-only; rhs is space-tokenised).
+//   step 9 ─ membership 'in' + list literals.
+//            list_lit is `[expr, expr, ...]` — any expression as an
+//            element. Right operand of 'in' must be a List (CEL-strict).
+//            Element-wise equality, error absorption (any-true wins;
+//            otherwise propagate Undefined if any comparison was Undef).
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -201,6 +205,7 @@ struct ParseState {
     std::unique_ptr<Node> parseAtIdentifier();
     std::unique_ptr<Node> parseNumber();
     std::unique_ptr<Node> parseString();
+    std::unique_ptr<Node> parseListLit();
 };
 
 // ── expr ──────────────────────────────────────
@@ -313,6 +318,7 @@ inline std::unique_ptr<Node> ParseState::parsePrimary() {
     const char first = peek();
 
     if (first == '(')   return parseParen();
+    if (first == '[')   return parseListLit();
     if (isAlpha(first)) return parseWordOrKeyword();
     if (first == '@')   return parseAtIdentifier();
     if (first == '"')   return parseString();
@@ -460,6 +466,49 @@ inline std::unique_ptr<Node> ParseState::parseString() {
     node->kind    = Node::Kind::LitString;
     node->str_val = std::move(decoded);
     return node;
+}
+
+// ── "[" ( expr ("," expr)* )? "]" ─────────────
+//
+// List literal. Empty list `[]` is allowed; trailing commas are not
+// (i.e. `[1, 2,]` is an error). Elements are full expressions, so list
+// literals nest naturally: `[[1, 2], [3, 4]]`.
+inline std::unique_ptr<Node> ParseState::parseListLit() {
+    const size_t open_pos = pos;
+    ++pos;                                  // consume '['
+    skipWhitespace();
+
+    auto node  = std::make_unique<Node>();
+    node->kind = Node::Kind::ListLit;
+
+    // Empty list
+    if (peek() == ']') {
+        ++pos;
+        return node;
+    }
+
+    while (true) {
+        auto elem = parseExpr();
+        if (!elem) return nullptr;
+        node->children.push_back(std::move(elem));
+
+        skipWhitespace();
+        if (peek() == ',') {
+            ++pos;                          // consume ','
+            skipWhitespace();
+            continue;
+        }
+        if (peek() == ']') {
+            ++pos;                          // consume ']'
+            return node;
+        }
+        if (atEnd()) {
+            fail(open_pos, "unclosed '['");
+        } else {
+            fail(pos, "expected ',' or ']' in list");
+        }
+        return nullptr;
+    }
 }
 
 } // namespace detail
