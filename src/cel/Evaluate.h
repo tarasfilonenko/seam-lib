@@ -41,8 +41,9 @@ inline Value evaluate(const Expression &expression, const Env & /*env*/) {
         return Value::boolean(true);    // always-true / empty source
     }
     switch (node->kind) {
-        case detail::Node::Kind::LitBool:
-            return Value::boolean(node->bool_val);
+        case detail::Node::Kind::LitBool:   return Value::boolean(node->bool_val);
+        case detail::Node::Kind::LitNumber: return Value::number(node->num_val);
+        case detail::Node::Kind::LitString: return Value::string(node->str_val);
     }
     return Value::undefined();          // unreachable today; defensive for future kinds
 }

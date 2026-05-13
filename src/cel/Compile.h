@@ -34,12 +34,16 @@
 // Current coverage:
 //   step 1 ─ empty / pure-whitespace source
 //   step 2 ─ boolean literals (true, false)
+//   step 3 ─ number literals (int + decimal, optional leading '-')
+//            string literals with \" \\ \n \t \r escapes
 // ─────────────────────────────────────────────
 
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "Expression.h"
 #include "detail/Node.h"
@@ -62,8 +66,11 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
     auto isAlpha = [](char c) {
         return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
     };
+    auto isDigit = [](char c) {
+        return c >= '0' && c <= '9';
+    };
     auto isAlnum = [&](char c) {
-        return isAlpha(c) || (c >= '0' && c <= '9');
+        return isAlpha(c) || isDigit(c);
     };
 
     size_t pos = 0;
@@ -72,26 +79,106 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
         return true;
     }
 
-    if (!isAlpha(source[pos])) {
+    auto node = std::make_unique<detail::Node>();
+    const char first = source[pos];
+    const bool startsNumber =
+        isDigit(first) ||
+        (first == '-' && pos + 1 < source.size() && isDigit(source[pos + 1]));
+
+    if (isAlpha(first)) {
+        const size_t word_start = pos;
+        while (pos < source.size() && isAlnum(source[pos])) ++pos;
+        std::string_view word = source.substr(word_start, pos - word_start);
+        if (word == "true") {
+            node->kind     = detail::Node::Kind::LitBool;
+            node->bool_val = true;
+        } else if (word == "false") {
+            node->kind     = detail::Node::Kind::LitBool;
+            node->bool_val = false;
+        } else {
+            err.position = word_start;
+            err.message  = "unknown identifier";
+            return false;
+        }
+    }
+    else if (startsNumber) {
+        const size_t num_start = pos;
+        if (source[pos] == '-') ++pos;
+        while (pos < source.size() && isDigit(source[pos])) ++pos;
+        if (pos < source.size() && source[pos] == '.') {
+            const size_t dot_pos    = pos;
+            ++pos;
+            const size_t frac_start = pos;
+            while (pos < source.size() && isDigit(source[pos])) ++pos;
+            if (pos == frac_start) {
+                err.position = dot_pos;
+                err.message  = "expected digits after '.'";
+                return false;
+            }
+        }
+
+        // Copy the lexed slice into a NUL-terminated buffer for strtod.
+        // The lexer has already validated the format, so strtod consuming
+        // the entire buffer is just defensive — anything else means a
+        // lexer/parser drift.
+        std::string buf(source.substr(num_start, pos - num_start));
+        char  *end = nullptr;
+        double v   = std::strtod(buf.c_str(), &end);
+        if (end != buf.c_str() + buf.size()) {
+            err.position = num_start;
+            err.message  = "invalid number";
+            return false;
+        }
+        node->kind    = detail::Node::Kind::LitNumber;
+        node->num_val = v;
+    }
+    else if (first == '"') {
+        const size_t str_start = pos;
+        ++pos;                              // skip opening quote
+        std::string  decoded;
+        bool         closed = false;
+
+        while (pos < source.size()) {
+            const char ch = source[pos];
+            if (ch == '"') {
+                closed = true;
+                ++pos;
+                break;
+            }
+            if (ch == '\\') {
+                ++pos;
+                if (pos >= source.size()) break;   // → unterminated below
+                const char esc = source[pos];
+                ++pos;
+                switch (esc) {
+                    case '"':  decoded.push_back('"');  break;
+                    case '\\': decoded.push_back('\\'); break;
+                    case 'n':  decoded.push_back('\n'); break;
+                    case 't':  decoded.push_back('\t'); break;
+                    case 'r':  decoded.push_back('\r'); break;
+                    default:
+                        err.position = pos - 1;        // offending escape char
+                        err.message  = "invalid escape";
+                        return false;
+                }
+                continue;
+            }
+            decoded.push_back(ch);
+            ++pos;
+        }
+
+        if (!closed) {
+            err.position = str_start;
+            err.message  = "unterminated string";
+            return false;
+        }
+
+        node->kind    = detail::Node::Kind::LitString;
+        node->str_val = std::move(decoded);
+    }
+    else {
         err.position = pos;
         err.message  = "expected identifier or literal";
-        return false;
-    }
-
-    const size_t word_start = pos;
-    while (pos < source.size() && isAlnum(source[pos])) ++pos;
-    std::string_view word = source.substr(word_start, pos - word_start);
-
-    auto node = std::make_unique<detail::Node>();
-    if (word == "true") {
-        node->kind     = detail::Node::Kind::LitBool;
-        node->bool_val = true;
-    } else if (word == "false") {
-        node->kind     = detail::Node::Kind::LitBool;
-        node->bool_val = false;
-    } else {
-        err.position = word_start;
-        err.message  = "unknown identifier";
         return false;
     }
 

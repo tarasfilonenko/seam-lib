@@ -13,12 +13,13 @@
 //
 // Layout choice: a single struct with all per-kind fields rather than a
 // std::variant or class hierarchy. Each kind only uses a subset; the
-// unused fields cost a few bytes per node but keep the code grammar
+// unused fields cost a few bytes per node but keep the grammar code
 // simple as features land, and don't allocate (Node owns nothing yet
 // except children).
 // ─────────────────────────────────────────────
 
 #include <cstdint>
+#include <string>
 
 namespace seam {
 namespace cel {
@@ -27,10 +28,14 @@ namespace detail {
 struct Node {
     enum class Kind : uint8_t {
         LitBool,
+        LitNumber,
+        LitString,
     };
 
-    Kind kind     = Kind::LitBool;
-    bool bool_val = false;
+    Kind        kind     = Kind::LitBool;
+    bool        bool_val = false;
+    double      num_val  = 0.0;
+    std::string str_val;
 };
 
 } // namespace detail
