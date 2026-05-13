@@ -14,8 +14,8 @@
 // Layout choice: a single struct with all per-kind fields rather than a
 // std::variant or class hierarchy. Each kind only uses a subset; the
 // unused fields cost a few bytes per node but keep the grammar code
-// simple as features land. Unary ops use `lhs`; binary ops (steps 7+)
-// will use `lhs` and `rhs`.
+// simple as features land. Unary ops use `lhs`; binary ops use both
+// `lhs` and `rhs`.
 //
 // Field reuse:
 //   str_val  ─ LitString body OR Identifier name (incl. '@' prefix)
@@ -38,6 +38,13 @@ struct Node {
         LitString,
         Identifier,
         Not,
+        // Comparison (binary). Type-strict: see evaluator for rules.
+        Eq,     // ==
+        Neq,    // !=
+        Lt,     // <
+        Le,     // <=
+        Gt,     // >
+        Ge,     // >=
     };
 
     Kind        kind     = Kind::LitBool;

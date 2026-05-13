@@ -19,3 +19,4 @@
 #include "cel/identifier.h"
 #include "cel/paren.h"
 #include "cel/not.h"
+#include "cel/cmp.h"

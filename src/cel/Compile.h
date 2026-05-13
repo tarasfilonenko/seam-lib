@@ -7,9 +7,9 @@
 // Grammar (precedence low → high):
 //   expr      := or_expr
 //   or_expr   := and_expr ( "||" and_expr )*
-//   and_expr  := not_expr ( "&&" not_expr )*
-//   not_expr  := "!" not_expr | cmp_expr
-//   cmp_expr  := primary ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) primary )?
+//   and_expr  := cmp_expr ( "&&" cmp_expr )*
+//   cmp_expr  := not_expr ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) not_expr )?
+//   not_expr  := "!" not_expr | primary
 //   primary   := number | string | "true" | "false" | identifier | "(" expr ")"
 //   identifier := bare_id | "@" bare_id
 //   bare_id   := /[A-Za-z_][A-Za-z0-9_]*/
@@ -40,6 +40,9 @@
 //   step 5 ─ parenthesised primaries + recursive parser structure
 //            (detail::ParseState holds per-production methods)
 //   step 6 ─ unary '!' (right-associative; type-strict on bool)
+//   step 7 ─ comparisons: == != < <= > >= (non-chainable, type-strict)
+//            Precedence: cmp_expr sits ABOVE not_expr, so
+//            `!a == b` parses as `(!a) == b` — matching C/CEL.
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -104,12 +107,22 @@ struct ParseState {
         }
     }
 
+    // Look-ahead for multi-char tokens (e.g. "==", "!=", "<=").
+    bool matches(std::string_view s) const noexcept {
+        if (pos + s.size() > source.size()) return false;
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (source[pos + i] != s[i]) return false;
+        }
+        return true;
+    }
+
     // ── grammar productions ───────────────────
     //
     // Each returns a Node on success or nullptr on failure (with err
     // populated). Defined out-of-line below for readability.
 
     std::unique_ptr<Node> parseExpr();
+    std::unique_ptr<Node> parseCmp();
     std::unique_ptr<Node> parseNot();
     std::unique_ptr<Node> parsePrimary();
 
@@ -122,12 +135,44 @@ struct ParseState {
 
 // ── expr ──────────────────────────────────────
 //
-// Top-level expression. Today: routes through parseNot. Later steps
-// (7+) will extend the precedence chain (or → and → not → cmp → primary)
-// by inserting rungs between parseExpr and parseNot.
+// Top-level expression. Today: routes through parseCmp. Later steps
+// (8+) will splice and/or rungs between parseExpr and parseCmp.
 inline std::unique_ptr<Node> ParseState::parseExpr() {
     skipWhitespace();
-    return parseNot();
+    return parseCmp();
+}
+
+// ── cmp_expr ──────────────────────────────────
+//
+// cmp_expr := not_expr ( op not_expr )?
+//   where op ∈ { ==, !=, <, <=, >, >= }   (in: step 10)
+//
+// Non-chainable: at most one comparison per cmp_expr. `a == b == c`
+// errors; grouping via parens (`(a == b) == c`) is fine.
+inline std::unique_ptr<Node> ParseState::parseCmp() {
+    auto lhs = parseNot();
+    if (!lhs) return nullptr;
+    skipWhitespace();
+
+    // Two-char ops checked before single-char so "<=" doesn't get split.
+    Node::Kind op_kind;
+    if      (matches("==")) { op_kind = Node::Kind::Eq;  pos += 2; }
+    else if (matches("!=")) { op_kind = Node::Kind::Neq; pos += 2; }
+    else if (matches("<=")) { op_kind = Node::Kind::Le;  pos += 2; }
+    else if (matches(">=")) { op_kind = Node::Kind::Ge;  pos += 2; }
+    else if (peek() == '<') { op_kind = Node::Kind::Lt;  ++pos;    }
+    else if (peek() == '>') { op_kind = Node::Kind::Gt;  ++pos;    }
+    else                    { return lhs; }
+
+    skipWhitespace();
+    auto rhs = parseNot();
+    if (!rhs) return nullptr;
+
+    auto node  = std::make_unique<Node>();
+    node->kind = op_kind;
+    node->lhs  = std::move(lhs);
+    node->rhs  = std::move(rhs);
+    return node;
 }
 
 // ── not_expr ──────────────────────────────────

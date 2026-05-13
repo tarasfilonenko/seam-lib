@@ -9,11 +9,14 @@
 //   - Identifiers are resolved through env.resolve(). Resolvers that
 //     return Value::undefined() cause the whole expression to evaluate
 //     to Value::undefined() (Undefined propagates through every operator).
-//   - Type mismatches at evaluation time (e.g. comparing a string to a
-//     number) yield Value::undefined() rather than throwing — the
-//     evaluator is total, so callers can wrap it in tight loops without
-//     try/catch overhead.
-//   - Unary '!' requires a bool operand; any other type → Undefined.
+//   - Unary '!' requires a bool operand; non-bool / Undefined → Undefined.
+//   - == / !=  require operands of the same kind (Bool/Number/String).
+//              Mismatched types → Undefined (not false).
+//   - < <= > >= require BOTH operands to be Number. Anything else
+//              (string/bool/mixed) → Undefined.
+//   - The evaluator is total: no exceptions, no UB on bad input. Bad
+//     runtime types collapse to Undefined and callers wrap evaluate()
+//     in tight loops without try/catch overhead.
 //
 // Callers that want a boolean answer should typically do:
 //
@@ -38,6 +41,45 @@ namespace cel {
 
 namespace detail {
 
+// Evaluate a binary comparison given already-resolved operand Values.
+// Centralises the type-strict rules so the recursive walker stays
+// readable.
+inline Value evalCmp(Node::Kind op, const Value &l, const Value &r) {
+    if (l.isUndefined() || r.isUndefined()) {
+        return Value::undefined();
+    }
+
+    // Equality / inequality: same kind required; bool/number/string each
+    // compare with their own ==. Mismatched kinds → Undefined.
+    if (op == Node::Kind::Eq || op == Node::Kind::Neq) {
+        if (l.kind() != r.kind()) {
+            return Value::undefined();
+        }
+        bool equal = false;
+        switch (l.kind()) {
+            case Value::Kind::Bool:   equal = l.asBool()   == r.asBool();   break;
+            case Value::Kind::Number: equal = l.asNumber() == r.asNumber(); break;
+            case Value::Kind::String: equal = l.asString() == r.asString(); break;
+            default:                  return Value::undefined();   // unreachable
+        }
+        return Value::boolean(op == Node::Kind::Eq ? equal : !equal);
+    }
+
+    // Ordering: both must be Number. Anything else → Undefined.
+    if (!l.isNumber() || !r.isNumber()) {
+        return Value::undefined();
+    }
+    const double a = l.asNumber();
+    const double b = r.asNumber();
+    switch (op) {
+        case Node::Kind::Lt: return Value::boolean(a <  b);
+        case Node::Kind::Le: return Value::boolean(a <= b);
+        case Node::Kind::Gt: return Value::boolean(a >  b);
+        case Node::Kind::Ge: return Value::boolean(a >= b);
+        default:             return Value::undefined();   // unreachable
+    }
+}
+
 // Recursive tree walker. Returns Value::boolean(true) for the empty
 // (null) Node — matches always-true semantics. Undefined propagates
 // through every operator branch.
@@ -56,8 +98,18 @@ inline Value evaluateNode(const Node *node, const Env &env) {
             if (!v.isBool())     return Value::undefined();   // type-strict
             return Value::boolean(!v.asBool());
         }
+        case Node::Kind::Eq:
+        case Node::Kind::Neq:
+        case Node::Kind::Lt:
+        case Node::Kind::Le:
+        case Node::Kind::Gt:
+        case Node::Kind::Ge: {
+            Value l = evaluateNode(node->lhs.get(), env);
+            Value r = evaluateNode(node->rhs.get(), env);
+            return evalCmp(node->kind, l, r);
+        }
     }
-    return Value::undefined();          // unreachable today; defensive for future kinds
+    return Value::undefined();      // unreachable today; defensive for future kinds
 }
 
 } // namespace detail

@@ -36,15 +36,20 @@ Precedence low → high:
 ```
 expr       := or_expr
 or_expr    := and_expr ( "||" and_expr )*
-and_expr   := not_expr ( "&&" not_expr )*
-not_expr   := "!" not_expr | cmp_expr
-cmp_expr   := primary ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) primary )?
+and_expr   := cmp_expr ( "&&" cmp_expr )*
+cmp_expr   := not_expr ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) not_expr )?
+not_expr   := "!" not_expr | primary
 primary    := number | string | "true" | "false" | identifier | "(" expr ")"
 identifier := bare_id | "@" bare_id
 bare_id    := [A-Za-z_][A-Za-z0-9_]*
 number     := -?[0-9]+("."[0-9]+)?
 string     := "([^"\\]|\\.)*"
 ```
+
+Precedence: `!` binds tighter than comparison (so `!a == b` is `(!a) ==
+b`), and comparisons bind tighter than `&&` / `||`. Comparisons are
+non-chainable: `a == b == c` is a parse error — use parens to group
+explicitly.
 
 Bare identifiers resolve to caps param ids. `@`-prefixed identifiers are
 reserved for host-provided state (e.g. `@connected`, `@preset_index`).
