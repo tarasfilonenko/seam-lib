@@ -20,3 +20,4 @@
 #include "cel/paren.h"
 #include "cel/not.h"
 #include "cel/cmp.h"
+#include "cel/logic.h"

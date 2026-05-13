@@ -45,6 +45,10 @@ struct Node {
         Le,     // <=
         Gt,     // >
         Ge,     // >=
+        // Logical (binary). Three-valued with error absorption: false
+        // absorbs in &&, true absorbs in ||.
+        And,    // &&
+        Or,     // ||
     };
 
     Kind        kind     = Kind::LitBool;

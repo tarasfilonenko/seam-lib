@@ -43,6 +43,10 @@
 //   step 7 ─ comparisons: == != < <= > >= (non-chainable, type-strict)
 //            Precedence: cmp_expr sits ABOVE not_expr, so
 //            `!a == b` parses as `(!a) == b` — matching C/CEL.
+//   step 8 ─ logical && and || (left-associative chains; three-valued
+//            with error absorption: false absorbs in &&, true absorbs
+//            in ||, anything else with a non-bool operand → Undefined).
+//            && binds tighter than ||.
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -122,6 +126,8 @@ struct ParseState {
     // populated). Defined out-of-line below for readability.
 
     std::unique_ptr<Node> parseExpr();
+    std::unique_ptr<Node> parseOr();
+    std::unique_ptr<Node> parseAnd();
     std::unique_ptr<Node> parseCmp();
     std::unique_ptr<Node> parseNot();
     std::unique_ptr<Node> parsePrimary();
@@ -135,11 +141,59 @@ struct ParseState {
 
 // ── expr ──────────────────────────────────────
 //
-// Top-level expression. Today: routes through parseCmp. Later steps
-// (8+) will splice and/or rungs between parseExpr and parseCmp.
+// Top-level entry. Routes through the precedence chain:
+//   parseOr → parseAnd → parseCmp → parseNot → parsePrimary
 inline std::unique_ptr<Node> ParseState::parseExpr() {
     skipWhitespace();
-    return parseCmp();
+    return parseOr();
+}
+
+// ── or_expr ───────────────────────────────────
+//
+// or_expr := and_expr ( "||" and_expr )*
+//
+// Left-associative chain: `a || b || c` → Or(Or(a, b), c).
+inline std::unique_ptr<Node> ParseState::parseOr() {
+    auto lhs = parseAnd();
+    if (!lhs) return nullptr;
+    while (true) {
+        skipWhitespace();
+        if (!matches("||")) break;
+        pos += 2;
+        skipWhitespace();
+        auto rhs = parseAnd();
+        if (!rhs) return nullptr;
+        auto node  = std::make_unique<Node>();
+        node->kind = Node::Kind::Or;
+        node->lhs  = std::move(lhs);
+        node->rhs  = std::move(rhs);
+        lhs        = std::move(node);
+    }
+    return lhs;
+}
+
+// ── and_expr ──────────────────────────────────
+//
+// and_expr := cmp_expr ( "&&" cmp_expr )*
+//
+// Left-associative; '&&' binds tighter than '||'.
+inline std::unique_ptr<Node> ParseState::parseAnd() {
+    auto lhs = parseCmp();
+    if (!lhs) return nullptr;
+    while (true) {
+        skipWhitespace();
+        if (!matches("&&")) break;
+        pos += 2;
+        skipWhitespace();
+        auto rhs = parseCmp();
+        if (!rhs) return nullptr;
+        auto node  = std::make_unique<Node>();
+        node->kind = Node::Kind::And;
+        node->lhs  = std::move(lhs);
+        node->rhs  = std::move(rhs);
+        lhs        = std::move(node);
+    }
+    return lhs;
 }
 
 // ── cmp_expr ──────────────────────────────────

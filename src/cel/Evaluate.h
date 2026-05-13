@@ -14,6 +14,10 @@
 //              Mismatched types → Undefined (not false).
 //   - < <= > >= require BOTH operands to be Number. Anything else
 //              (string/bool/mixed) → Undefined.
+//   - && / ||  use three-valued logic with error absorption:
+//                 false  absorbs in &&  → false even if other is Undef/non-bool
+//                 true   absorbs in ||  → true  even if other is Undef/non-bool
+//              Non-absorbing combinations of non-bool / Undefined → Undefined.
 //   - The evaluator is total: no exceptions, no UB on bad input. Bad
 //     runtime types collapse to Undefined and callers wrap evaluate()
 //     in tight loops without try/catch overhead.
@@ -107,6 +111,27 @@ inline Value evaluateNode(const Node *node, const Env &env) {
             Value l = evaluateNode(node->lhs.get(), env);
             Value r = evaluateNode(node->rhs.get(), env);
             return evalCmp(node->kind, l, r);
+        }
+        case Node::Kind::And: {
+            // CEL three-valued with error absorption: a definitive `false`
+            // in either operand makes the result false, regardless of the
+            // other operand's type or undefined-ness. Otherwise both must
+            // be bool to get a true; anything else → Undefined.
+            Value l = evaluateNode(node->lhs.get(), env);
+            Value r = evaluateNode(node->rhs.get(), env);
+            if (l.isBool() && !l.asBool()) return Value::boolean(false);
+            if (r.isBool() && !r.asBool()) return Value::boolean(false);
+            if (l.isBool() && r.isBool()) return Value::boolean(l.asBool() && r.asBool());
+            return Value::undefined();
+        }
+        case Node::Kind::Or: {
+            // Mirror of &&: definitive `true` absorbs.
+            Value l = evaluateNode(node->lhs.get(), env);
+            Value r = evaluateNode(node->rhs.get(), env);
+            if (l.isBool() && l.asBool()) return Value::boolean(true);
+            if (r.isBool() && r.asBool()) return Value::boolean(true);
+            if (l.isBool() && r.isBool()) return Value::boolean(l.asBool() || r.asBool());
+            return Value::undefined();
         }
     }
     return Value::undefined();      // unreachable today; defensive for future kinds
