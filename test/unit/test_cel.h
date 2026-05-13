@@ -23,3 +23,4 @@
 #include "cel/logic.h"
 #include "cel/list.h"
 #include "cel/in.h"
+#include "cel/error.h"

@@ -73,6 +73,18 @@ namespace cel {
 struct CompileError {
     size_t      position = 0;       // byte offset into source where error was detected
     std::string message;            // short reason, e.g. "expected operator"
+
+    // Human-friendly position. Computed automatically when an error is
+    // recorded; both are 1-based, with 0 meaning "no error".
+    size_t      line   = 0;
+    size_t      column = 0;
+
+    // Optional opener offset for paired delimiters (parens / brackets).
+    // Set for "unclosed '('" / "expected ')'" / "unclosed '['" /
+    // "expected ',' or ']'" so the formatter can show both the error
+    // point and the matching opener.
+    size_t      paired_position = 0;
+    bool        has_paired      = false;
 };
 
 namespace detail {
@@ -136,9 +148,41 @@ struct ParseState {
         while (!atEnd() && isSpace(source[pos])) ++pos;
     }
 
+    // Computes line/column from a byte offset within the current source.
+    // Both 1-based. Tabs count as one column (we don't expand tab stops).
+    void setLineCol(size_t at) const noexcept {
+        size_t line = 1;
+        size_t col  = 1;
+        const size_t end = at < source.size() ? at : source.size();
+        for (size_t i = 0; i < end; ++i) {
+            if (source[i] == '\n') {
+                ++line;
+                col = 1;
+            } else {
+                ++col;
+            }
+        }
+        err->line   = line;
+        err->column = col;
+    }
+
     void fail(size_t at, const char *msg) {
-        err->position = at;
-        err->message  = msg;
+        err->position        = at;
+        err->message         = msg;
+        err->paired_position = 0;
+        err->has_paired      = false;
+        setLineCol(at);
+    }
+
+    // Variant used by paired delimiters (parens/brackets): records the
+    // position of the matching opener alongside the error point so the
+    // formatter can show both.
+    void failPaired(size_t at, size_t opener_pos, const char *msg) {
+        err->position        = at;
+        err->message         = msg;
+        err->paired_position = opener_pos;
+        err->has_paired      = true;
+        setLineCol(at);
     }
 
     void addRef(std::string name) {
@@ -342,8 +386,8 @@ inline std::unique_ptr<Node> ParseState::parseParen() {
     if (!inner) return nullptr;
     skipWhitespace();
     if (atEnd() || peek() != ')') {
-        if (atEnd()) fail(open_pos, "unclosed '('");
-        else         fail(pos,      "expected ')'");
+        if (atEnd()) failPaired(open_pos, open_pos, "unclosed '('");
+        else         failPaired(pos,      open_pos, "expected ')' to close '('");
         return nullptr;
     }
     ++pos;                                  // consume ')'
@@ -503,9 +547,9 @@ inline std::unique_ptr<Node> ParseState::parseListLit() {
             return node;
         }
         if (atEnd()) {
-            fail(open_pos, "unclosed '['");
+            failPaired(open_pos, open_pos, "unclosed '['");
         } else {
-            fail(pos, "expected ',' or ']' in list");
+            failPaired(pos, open_pos, "expected ',' or ']' in list");
         }
         return nullptr;
     }
@@ -532,8 +576,7 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
 
     p.skipWhitespace();
     if (!p.atEnd()) {
-        err.position = p.pos;
-        err.message  = "unexpected trailing content";
+        p.fail(p.pos, "unexpected trailing content");
         return false;
     }
 
