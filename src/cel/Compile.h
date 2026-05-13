@@ -38,7 +38,7 @@
 //            string literals with \" \\ \n \t \r escapes
 //   step 4 ─ identifiers (bare + '@'-prefixed) + references tracking
 //   step 5 ─ parenthesised primaries + recursive parser structure
-//            (parseExpr / parsePrimary split via detail::ParseState)
+//            (detail::ParseState holds per-production methods)
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -63,16 +63,22 @@ struct CompileError {
 
 namespace detail {
 
-// Mutable parser state carried through parseExpr / parsePrimary and any
-// helpers. Holds the source view, the cursor, and pointers to the
-// caller-owned `refs` vector and `err` struct. Pointer semantics keep
-// the state struct cheap to pass around without aliasing the
-// Expression's own members during partial parses.
+// Recursive-descent parser carrying source + cursor + outputs. Each
+// grammar production is a method that returns a parsed Node (or
+// nullptr on failure, with the failure recorded in *err). The cursor
+// advances as productions consume input.
+//
+// Pointer semantics for `refs` and `err` keep the state struct cheap
+// to copy/move and let the public compile() own the actual vector +
+// CompileError without ParseState aliasing Expression's members
+// during partial parses.
 struct ParseState {
     std::string_view          source;
     size_t                    pos  = 0;
     std::vector<std::string> *refs = nullptr;
     CompileError             *err  = nullptr;
+
+    // ── cursor helpers ────────────────────────
 
     bool atEnd() const noexcept { return pos >= source.size(); }
     char peek()  const noexcept { return atEnd() ? '\0' : source[pos]; }
@@ -96,158 +102,186 @@ struct ParseState {
             refs->push_back(std::move(name));
         }
     }
+
+    // ── grammar productions ───────────────────
+    //
+    // Each returns a Node on success or nullptr on failure (with err
+    // populated). Defined out-of-line below for readability.
+
+    std::unique_ptr<Node> parseExpr();
+    std::unique_ptr<Node> parsePrimary();
+
+    std::unique_ptr<Node> parseParen();
+    std::unique_ptr<Node> parseWordOrKeyword();
+    std::unique_ptr<Node> parseAtIdentifier();
+    std::unique_ptr<Node> parseNumber();
+    std::unique_ptr<Node> parseString();
 };
 
-// Forward decl — parsePrimary needs parseExpr for the paren case.
-inline std::unique_ptr<Node> parseExpr(ParseState &p);
-
-inline std::unique_ptr<Node> parsePrimary(ParseState &p) {
-    const char first = p.peek();
-
-    // ── (expr) ─────────────────────────────────
-    if (first == '(') {
-        const size_t open_pos = p.pos;
-        ++p.pos;
-        p.skipWhitespace();
-        auto inner = parseExpr(p);
-        if (!inner) return nullptr;
-        p.skipWhitespace();
-        if (p.atEnd() || p.peek() != ')') {
-            if (p.atEnd()) p.fail(open_pos, "unclosed '('");
-            else           p.fail(p.pos,    "expected ')'");
-            return nullptr;
-        }
-        ++p.pos;
-        return inner;
-    }
-
-    auto node = std::make_unique<Node>();
-    const bool startsNumber =
-        ParseState::isDigit(first) ||
-        (first == '-' && p.pos + 1 < p.source.size() && ParseState::isDigit(p.source[p.pos + 1]));
-
-    // ── alpha-word: keyword (true/false) or bare identifier ────
-    if (ParseState::isAlpha(first)) {
-        const size_t word_start = p.pos;
-        while (!p.atEnd() && ParseState::isAlnum(p.peek())) ++p.pos;
-        std::string_view word = p.source.substr(word_start, p.pos - word_start);
-        if (word == "true") {
-            node->kind     = Node::Kind::LitBool;
-            node->bool_val = true;
-        } else if (word == "false") {
-            node->kind     = Node::Kind::LitBool;
-            node->bool_val = false;
-        } else {
-            node->kind    = Node::Kind::Identifier;
-            node->str_val = std::string(word);
-            p.addRef(node->str_val);
-        }
-        return node;
-    }
-
-    // ── @bare_id ───────────────────────────────
-    if (first == '@') {
-        const size_t at_pos = p.pos;
-        ++p.pos;
-        if (p.atEnd() || !ParseState::isAlpha(p.peek())) {
-            p.fail(at_pos, "expected identifier after '@'");
-            return nullptr;
-        }
-        while (!p.atEnd() && ParseState::isAlnum(p.peek())) ++p.pos;
-        node->kind    = Node::Kind::Identifier;
-        node->str_val = std::string(p.source.substr(at_pos, p.pos - at_pos));   // includes '@'
-        p.addRef(node->str_val);
-        return node;
-    }
-
-    // ── number ─────────────────────────────────
-    if (startsNumber) {
-        const size_t num_start = p.pos;
-        if (p.peek() == '-') ++p.pos;
-        while (!p.atEnd() && ParseState::isDigit(p.peek())) ++p.pos;
-        if (!p.atEnd() && p.peek() == '.') {
-            const size_t dot_pos    = p.pos;
-            ++p.pos;
-            const size_t frac_start = p.pos;
-            while (!p.atEnd() && ParseState::isDigit(p.peek())) ++p.pos;
-            if (p.pos == frac_start) {
-                p.fail(dot_pos, "expected digits after '.'");
-                return nullptr;
-            }
-        }
-
-        // Copy the lexed slice into a NUL-terminated buffer for strtod.
-        // The lexer has already validated the format, so strtod consuming
-        // the entire buffer is just defensive — anything else means a
-        // lexer/parser drift.
-        std::string buf(p.source.substr(num_start, p.pos - num_start));
-        char  *end = nullptr;
-        double v   = std::strtod(buf.c_str(), &end);
-        if (end != buf.c_str() + buf.size()) {
-            p.fail(num_start, "invalid number");
-            return nullptr;
-        }
-        node->kind    = Node::Kind::LitNumber;
-        node->num_val = v;
-        return node;
-    }
-
-    // ── string ─────────────────────────────────
-    if (first == '"') {
-        const size_t str_start = p.pos;
-        ++p.pos;                              // skip opening quote
-        std::string  decoded;
-        bool         closed = false;
-
-        while (!p.atEnd()) {
-            const char ch = p.peek();
-            if (ch == '"') {
-                closed = true;
-                ++p.pos;
-                break;
-            }
-            if (ch == '\\') {
-                ++p.pos;
-                if (p.atEnd()) break;          // → unterminated below
-                const char esc = p.peek();
-                ++p.pos;
-                switch (esc) {
-                    case '"':  decoded.push_back('"');  break;
-                    case '\\': decoded.push_back('\\'); break;
-                    case 'n':  decoded.push_back('\n'); break;
-                    case 't':  decoded.push_back('\t'); break;
-                    case 'r':  decoded.push_back('\r'); break;
-                    default:
-                        p.fail(p.pos - 1, "invalid escape");   // offending escape char
-                        return nullptr;
-                }
-                continue;
-            }
-            decoded.push_back(ch);
-            ++p.pos;
-        }
-
-        if (!closed) {
-            p.fail(str_start, "unterminated string");
-            return nullptr;
-        }
-
-        node->kind    = Node::Kind::LitString;
-        node->str_val = std::move(decoded);
-        return node;
-    }
-
-    // ── nothing matched (also covers EOF: peek() returns '\0') ──
-    p.fail(p.pos, "expected identifier or literal");
-    return nullptr;
-}
-
+// ── expr ──────────────────────────────────────
+//
 // Top-level expression. For now it's a thin wrapper around parsePrimary;
 // later steps (6+) will dispatch through the precedence chain
 // (or_expr → and_expr → not_expr → cmp_expr → primary).
-inline std::unique_ptr<Node> parseExpr(ParseState &p) {
-    p.skipWhitespace();
-    return parsePrimary(p);
+inline std::unique_ptr<Node> ParseState::parseExpr() {
+    skipWhitespace();
+    return parsePrimary();
+}
+
+// ── primary ───────────────────────────────────
+//
+// Dispatches by first non-whitespace char to a per-kind parser.
+inline std::unique_ptr<Node> ParseState::parsePrimary() {
+    const char first = peek();
+
+    if (first == '(')   return parseParen();
+    if (isAlpha(first)) return parseWordOrKeyword();
+    if (first == '@')   return parseAtIdentifier();
+    if (first == '"')   return parseString();
+
+    const bool starts_number =
+        isDigit(first) ||
+        (first == '-' && pos + 1 < source.size() && isDigit(source[pos + 1]));
+    if (starts_number) return parseNumber();
+
+    // Also covers EOF — peek() returns '\0' and matches nothing above.
+    fail(pos, "expected identifier or literal");
+    return nullptr;
+}
+
+// ── "(" expr ")" ──────────────────────────────
+inline std::unique_ptr<Node> ParseState::parseParen() {
+    const size_t open_pos = pos;
+    ++pos;                                  // consume '('
+    skipWhitespace();
+    auto inner = parseExpr();
+    if (!inner) return nullptr;
+    skipWhitespace();
+    if (atEnd() || peek() != ')') {
+        if (atEnd()) fail(open_pos, "unclosed '('");
+        else         fail(pos,      "expected ')'");
+        return nullptr;
+    }
+    ++pos;                                  // consume ')'
+    return inner;
+}
+
+// ── bare_id, "true", "false" ──────────────────
+inline std::unique_ptr<Node> ParseState::parseWordOrKeyword() {
+    const size_t word_start = pos;
+    while (!atEnd() && isAlnum(peek())) ++pos;
+    std::string_view word = source.substr(word_start, pos - word_start);
+
+    auto node = std::make_unique<Node>();
+    if (word == "true") {
+        node->kind     = Node::Kind::LitBool;
+        node->bool_val = true;
+    } else if (word == "false") {
+        node->kind     = Node::Kind::LitBool;
+        node->bool_val = false;
+    } else {
+        node->kind    = Node::Kind::Identifier;
+        node->str_val = std::string(word);
+        addRef(node->str_val);
+    }
+    return node;
+}
+
+// ── "@" bare_id ───────────────────────────────
+inline std::unique_ptr<Node> ParseState::parseAtIdentifier() {
+    const size_t at_pos = pos;
+    ++pos;                                  // consume '@'
+    if (atEnd() || !isAlpha(peek())) {
+        fail(at_pos, "expected identifier after '@'");
+        return nullptr;
+    }
+    while (!atEnd() && isAlnum(peek())) ++pos;
+
+    auto node = std::make_unique<Node>();
+    node->kind    = Node::Kind::Identifier;
+    node->str_val = std::string(source.substr(at_pos, pos - at_pos));   // includes '@'
+    addRef(node->str_val);
+    return node;
+}
+
+// ── -? [0-9]+ ( "." [0-9]+ )? ─────────────────
+inline std::unique_ptr<Node> ParseState::parseNumber() {
+    const size_t num_start = pos;
+    if (peek() == '-') ++pos;
+    while (!atEnd() && isDigit(peek())) ++pos;
+    if (!atEnd() && peek() == '.') {
+        const size_t dot_pos    = pos;
+        ++pos;
+        const size_t frac_start = pos;
+        while (!atEnd() && isDigit(peek())) ++pos;
+        if (pos == frac_start) {
+            fail(dot_pos, "expected digits after '.'");
+            return nullptr;
+        }
+    }
+
+    // Copy the lexed slice into a NUL-terminated buffer for strtod.
+    // The lexer has already validated the format, so strtod consuming
+    // the entire buffer is defensive — anything else means lexer/parser
+    // drift.
+    std::string buf(source.substr(num_start, pos - num_start));
+    char  *end = nullptr;
+    double v   = std::strtod(buf.c_str(), &end);
+    if (end != buf.c_str() + buf.size()) {
+        fail(num_start, "invalid number");
+        return nullptr;
+    }
+
+    auto node = std::make_unique<Node>();
+    node->kind    = Node::Kind::LitNumber;
+    node->num_val = v;
+    return node;
+}
+
+// ── "([^"\\]|\\.)*" ───────────────────────────
+inline std::unique_ptr<Node> ParseState::parseString() {
+    const size_t str_start = pos;
+    ++pos;                                  // consume opening quote
+    std::string  decoded;
+    bool         closed = false;
+
+    while (!atEnd()) {
+        const char ch = peek();
+        if (ch == '"') {
+            closed = true;
+            ++pos;
+            break;
+        }
+        if (ch == '\\') {
+            ++pos;
+            if (atEnd()) break;             // → unterminated below
+            const char esc = peek();
+            ++pos;
+            switch (esc) {
+                case '"':  decoded.push_back('"');  break;
+                case '\\': decoded.push_back('\\'); break;
+                case 'n':  decoded.push_back('\n'); break;
+                case 't':  decoded.push_back('\t'); break;
+                case 'r':  decoded.push_back('\r'); break;
+                default:
+                    fail(pos - 1, "invalid escape");    // offending escape char
+                    return nullptr;
+            }
+            continue;
+        }
+        decoded.push_back(ch);
+        ++pos;
+    }
+
+    if (!closed) {
+        fail(str_start, "unterminated string");
+        return nullptr;
+    }
+
+    auto node = std::make_unique<Node>();
+    node->kind    = Node::Kind::LitString;
+    node->str_val = std::move(decoded);
+    return node;
 }
 
 } // namespace detail
@@ -264,7 +298,7 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
         return true;                            // empty / whitespace
     }
 
-    auto node = detail::parseExpr(p);
+    auto node = p.parseExpr();
     if (!node) {
         return false;                           // err already populated
     }
