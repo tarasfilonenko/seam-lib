@@ -156,3 +156,53 @@ test(cel_eval_list_and_bool_is_undefined) {
     // Logical ops require bool; a non-bool / non-absorbing op is Undef.
     cel_expect_undefined("[1] && true");
 }
+
+test(cel_eval_repeated_dynamic_list_literal_does_not_leak_heap) {
+#if defined(ARDUINO_ARCH_ESP32)
+    auto c = cel_test::compileSrc("[gain, mode == \"advanced\", 42]");
+    assertTrue(c.ok);
+
+    cel_test::Registry reg{{
+        { "gain", seam::cel::Value::number(1) },
+        { "mode", seam::cel::Value::string("basic") },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    // Warm the allocator once so we measure steady-state behaviour rather
+    // than one-time setup work inside the runtime or libc.
+    {
+        seam::cel::Value warm = seam::cel::evaluate(c.expr, env);
+        assertTrue(warm.isList());
+    }
+
+    const size_t heap_before    = cel_test::freeHeapBytes();
+    const size_t largest_before = cel_test::largestFreeBlockBytes();
+
+    for (int i = 0; i < 4000; ++i) {
+        reg.entries[0].second = seam::cel::Value::number(i);
+
+        seam::cel::Value v = seam::cel::evaluate(c.expr, env);
+        assertTrue(v.isList());
+        auto data = v.asList();
+        assertTrue(data != nullptr);
+        assertEqual((size_t)3, data->items.size());
+    }
+
+    const size_t heap_after    = cel_test::freeHeapBytes();
+    const size_t largest_after = cel_test::largestFreeBlockBytes();
+
+    // Repeated evaluate() may still allocate transiently today, but it
+    // should return that memory once each Value falls out of scope.
+    const size_t heap_loss =
+        heap_before >= heap_after ? (heap_before - heap_after)
+                                  : (heap_after - heap_before);
+    const size_t largest_loss =
+        largest_before >= largest_after ? (largest_before - largest_after)
+                                        : (largest_after - largest_before);
+
+    assertTrue(heap_loss <= 128);
+    assertTrue(largest_loss <= 512);
+#else
+    assertTrue(true);
+#endif
+}

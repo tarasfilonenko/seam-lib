@@ -26,6 +26,11 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp_heap_caps.h>
+#endif
+
 #include "cel/cel.h"
 
 namespace cel_test {
@@ -92,6 +97,16 @@ inline seam::cel::Value evalEmpty(std::string_view src) {
     seam::cel::Env env = emptyEnv();
     return eval(src, env);
 }
+
+#if defined(ARDUINO_ARCH_ESP32)
+inline size_t freeHeapBytes() {
+    return heap_caps_get_free_size(MALLOC_CAP_8BIT);
+}
+
+inline size_t largestFreeBlockBytes() {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+}
+#endif
 
 } // namespace cel_test
 
