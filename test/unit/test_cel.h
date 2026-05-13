@@ -91,4 +91,93 @@ test(cel_compile_resets_err_on_success) {
     assertEqual("", err.message.c_str());
 }
 
-// ── Steps 2+ go here ──────────────────────────────────────────
+// ── Step 2: boolean literals ──────────────────────────────────
+
+test(cel_compile_true_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("true", expr, err);
+    assertTrue(ok);
+    assertFalse(expr.isAlwaysTrue());
+    assertEqual((size_t)0, expr.references().size());
+}
+
+test(cel_compile_false_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("false", expr, err);
+    assertTrue(ok);
+    assertFalse(expr.isAlwaysTrue());
+}
+
+test(cel_evaluate_true_returns_true) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("true", expr, err);
+    seam::cel::Env   env = cel_test::emptyEnv();
+    seam::cel::Value v   = seam::cel::evaluate(expr, env);
+    assertTrue(v.isBool());
+    assertTrue(v.asBool());
+}
+
+test(cel_evaluate_false_returns_false) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("false", expr, err);
+    seam::cel::Env   env = cel_test::emptyEnv();
+    seam::cel::Value v   = seam::cel::evaluate(expr, env);
+    assertTrue(v.isBool());
+    assertFalse(v.asBool());
+}
+
+test(cel_compile_bool_literal_with_surrounding_whitespace) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("  true  \n", expr, err);
+    assertTrue(ok);
+    seam::cel::Env   env = cel_test::emptyEnv();
+    seam::cel::Value v   = seam::cel::evaluate(expr, env);
+    assertTrue(v.isBool());
+    assertTrue(v.asBool());
+}
+
+test(cel_compile_trailing_garbage_fails_and_resets_expression) {
+    // Anything after the literal (other than whitespace) is a parse error,
+    // and on failure the Expression must be reset to always-true so the
+    // caller's fail-open policy gives a sensible result.
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("true xyz", expr, err);
+    assertFalse(ok);
+    assertTrue(expr.isAlwaysTrue());
+    assertEqual((size_t)5, err.position);   // 'x'
+}
+
+test(cel_compile_glued_word_is_unknown_identifier) {
+    // Lexer reads full identifier-like words before classifying, so
+    // "truefalse" is one word that matches neither bool literal — should
+    // error at the start of the word, not in the middle.
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("truefalse", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)0, err.position);
+}
+
+test(cel_compile_two_literals_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("true false", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)5, err.position);   // 'f' in "false"
+}
+
+test(cel_compile_leading_non_letter_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)0, err.position);
+}
+
+// ── Steps 3+ go here ──────────────────────────────────────────

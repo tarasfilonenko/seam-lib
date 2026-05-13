@@ -30,18 +30,21 @@
 #include "Env.h"
 #include "Expression.h"
 #include "Value.h"
+#include "detail/Node.h"
 
 namespace seam {
 namespace cel {
 
 inline Value evaluate(const Expression &expression, const Env & /*env*/) {
-    if (expression.isAlwaysTrue()) {
-        return Value::boolean(true);
+    const detail::Node *node = expression._root.get();
+    if (!node) {
+        return Value::boolean(true);    // always-true / empty source
     }
-    // AST-walking arrives with the parser. Until then any non-empty
-    // expression is unreachable here (compile() refuses non-empty source
-    // until each grammar feature is implemented).
-    return Value::undefined();
+    switch (node->kind) {
+        case detail::Node::Kind::LitBool:
+            return Value::boolean(node->bool_val);
+    }
+    return Value::undefined();          // unreachable today; defensive for future kinds
 }
 
 } // namespace cel
