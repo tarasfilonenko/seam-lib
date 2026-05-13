@@ -39,6 +39,7 @@
 //   step 4 ─ identifiers (bare + '@'-prefixed) + references tracking
 //   step 5 ─ parenthesised primaries + recursive parser structure
 //            (detail::ParseState holds per-production methods)
+//   step 6 ─ unary '!' (right-associative; type-strict on bool)
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -109,6 +110,7 @@ struct ParseState {
     // populated). Defined out-of-line below for readability.
 
     std::unique_ptr<Node> parseExpr();
+    std::unique_ptr<Node> parseNot();
     std::unique_ptr<Node> parsePrimary();
 
     std::unique_ptr<Node> parseParen();
@@ -120,12 +122,32 @@ struct ParseState {
 
 // ── expr ──────────────────────────────────────
 //
-// Top-level expression. For now it's a thin wrapper around parsePrimary;
-// later steps (6+) will dispatch through the precedence chain
-// (or_expr → and_expr → not_expr → cmp_expr → primary).
+// Top-level expression. Today: routes through parseNot. Later steps
+// (7+) will extend the precedence chain (or → and → not → cmp → primary)
+// by inserting rungs between parseExpr and parseNot.
 inline std::unique_ptr<Node> ParseState::parseExpr() {
     skipWhitespace();
-    return parsePrimary();
+    return parseNot();
+}
+
+// ── not_expr ──────────────────────────────────
+//
+// not_expr := "!" not_expr | primary
+//
+// Right-associative: `!!x` parses as Not(Not(x)). Whitespace between
+// the '!' and its operand is allowed.
+inline std::unique_ptr<Node> ParseState::parseNot() {
+    if (peek() != '!') {
+        return parsePrimary();
+    }
+    ++pos;                                  // consume '!'
+    skipWhitespace();
+    auto child = parseNot();                // recurse for chained '!'
+    if (!child) return nullptr;
+    auto node  = std::make_unique<Node>();
+    node->kind = Node::Kind::Not;
+    node->lhs  = std::move(child);
+    return node;
 }
 
 // ── primary ───────────────────────────────────

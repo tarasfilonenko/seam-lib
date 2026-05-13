@@ -14,15 +14,17 @@
 // Layout choice: a single struct with all per-kind fields rather than a
 // std::variant or class hierarchy. Each kind only uses a subset; the
 // unused fields cost a few bytes per node but keep the grammar code
-// simple as features land, and don't allocate (Node owns nothing yet
-// except children).
+// simple as features land. Unary ops use `lhs`; binary ops (steps 7+)
+// will use `lhs` and `rhs`.
 //
-// Field reuse: `str_val` carries the decoded string body for LitString
-// AND the identifier name (including any '@' prefix) for Identifier.
-// `kind` discriminates.
+// Field reuse:
+//   str_val  ─ LitString body OR Identifier name (incl. '@' prefix)
+//   lhs      ─ unary operand (Not) OR binary left operand
+//   rhs      ─ binary right operand (unused for unary)
 // ─────────────────────────────────────────────
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace seam {
@@ -35,12 +37,16 @@ struct Node {
         LitNumber,
         LitString,
         Identifier,
+        Not,
     };
 
     Kind        kind     = Kind::LitBool;
     bool        bool_val = false;
     double      num_val  = 0.0;
-    std::string str_val;        // LitString body OR Identifier name
+    std::string str_val;            // LitString body OR Identifier name
+
+    std::unique_ptr<Node> lhs;      // unary operand (Not) OR binary left
+    std::unique_ptr<Node> rhs;      // binary right (unused for unary)
 };
 
 } // namespace detail

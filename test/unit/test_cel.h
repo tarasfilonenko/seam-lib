@@ -18,3 +18,4 @@
 #include "cel/string.h"
 #include "cel/identifier.h"
 #include "cel/paren.h"
+#include "cel/not.h"

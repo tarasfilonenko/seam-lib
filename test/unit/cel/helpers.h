@@ -146,6 +146,12 @@ inline seam::cel::Value evalEmpty(std::string_view src) {
         assertTrue(_v.isUndefined());                                   \
     } while (0)
 
+#define cel_expect_undefined(src)                                       \
+    do {                                                                \
+        auto _v = cel_test::evalEmpty(src);                             \
+        assertTrue(_v.isUndefined());                                   \
+    } while (0)
+
 // Compile-only checks.
 #define cel_expect_compile_error(src, pos)                              \
     do {                                                                \
