@@ -16,6 +16,10 @@
 // unused fields cost a few bytes per node but keep the grammar code
 // simple as features land, and don't allocate (Node owns nothing yet
 // except children).
+//
+// Field reuse: `str_val` carries the decoded string body for LitString
+// AND the identifier name (including any '@' prefix) for Identifier.
+// `kind` discriminates.
 // ─────────────────────────────────────────────
 
 #include <cstdint>
@@ -30,12 +34,13 @@ struct Node {
         LitBool,
         LitNumber,
         LitString,
+        Identifier,
     };
 
     Kind        kind     = Kind::LitBool;
     bool        bool_val = false;
     double      num_val  = 0.0;
-    std::string str_val;
+    std::string str_val;        // LitString body OR Identifier name
 };
 
 } // namespace detail

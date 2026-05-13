@@ -10,6 +10,8 @@
 // ─────────────────────────────────────────────
 
 #include <AUnit.h>
+#include <utility>
+#include <vector>
 #include "cel/cel.h"
 
 namespace cel_test {
@@ -20,6 +22,30 @@ inline seam::cel::Value lookupAlwaysUndefined(void* /*ctx*/, std::string_view /*
 
 inline seam::cel::Env emptyEnv() {
     return seam::cel::Env{ nullptr, &lookupAlwaysUndefined };
+}
+
+// Small in-memory binding store for tests. Linear scan, copies values
+// out — fine for a few entries per test.
+struct Registry {
+    std::vector<std::pair<std::string, seam::cel::Value>> entries;
+
+    seam::cel::Value lookup(std::string_view id) const {
+        for (const auto &e : entries) {
+            if (e.first == id) return e.second;
+        }
+        return seam::cel::Value::undefined();
+    }
+};
+
+inline seam::cel::Value lookupRegistry(void *ctx, std::string_view id) {
+    return static_cast<const Registry *>(ctx)->lookup(id);
+}
+
+inline seam::cel::Env envFor(const Registry &reg) {
+    return seam::cel::Env{
+        const_cast<Registry *>(&reg),   // Env stores void*; we never mutate
+        &lookupRegistry,
+    };
 }
 
 } // namespace cel_test
@@ -502,4 +528,219 @@ test(cel_compile_string_with_zero_escape_fails) {
     assertEqual((size_t)3, err.position);    // the '0' after '\'
 }
 
-// ── Steps 4+ go here ──────────────────────────────────────────
+// ── Step 4: identifiers (bare + @-prefixed) ───────────────────
+
+// Bare identifiers — compile + references
+test(cel_compile_bare_identifier_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("foo", expr, err);
+    assertTrue(ok);
+    assertFalse(expr.isAlwaysTrue());
+    assertEqual((size_t)1, expr.references().size());
+    assertEqual("foo", expr.references()[0].c_str());
+}
+
+test(cel_compile_underscore_prefix_identifier_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("_internal", expr, err);
+    assertTrue(ok);
+    assertEqual("_internal", expr.references()[0].c_str());
+}
+
+test(cel_compile_identifier_with_digits_succeeds) {
+    // bare_id := [A-Za-z_][A-Za-z0-9_]*  — digits allowed after first char
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("chan_1", expr, err);
+    assertTrue(ok);
+    assertEqual("chan_1", expr.references()[0].c_str());
+}
+
+test(cel_compile_capitalised_keyword_is_identifier) {
+    // "true"/"false" are case-sensitive keywords; "True" or "TRUE" are
+    // plain identifiers that resolve via Env.
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("TRUE", expr, err);
+    assertTrue(ok);
+    assertEqual("TRUE", expr.references()[0].c_str());
+}
+
+// Bare identifiers — evaluation
+test(cel_evaluate_bare_identifier_resolves_via_env) {
+    cel_test::Registry reg{{
+        { "gain", seam::cel::Value::number(3.5) },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("gain", expr, err);
+    seam::cel::Value v = seam::cel::evaluate(expr, env);
+    assertTrue(v.isNumber());
+    assertNear(3.5, v.asNumber(), 1e-9);
+}
+
+test(cel_evaluate_identifier_returns_bool_value) {
+    cel_test::Registry reg{{
+        { "muted", seam::cel::Value::boolean(true) },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("muted", expr, err);
+    seam::cel::Value v = seam::cel::evaluate(expr, env);
+    assertTrue(v.isBool());
+    assertTrue(v.asBool());
+}
+
+test(cel_evaluate_identifier_returns_string_value) {
+    cel_test::Registry reg{{
+        { "mode", seam::cel::Value::string("advanced") },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("mode", expr, err);
+    seam::cel::Value v = seam::cel::evaluate(expr, env);
+    assertTrue(v.isString());
+    assertEqual("advanced", std::string(v.asString()).c_str());
+}
+
+test(cel_evaluate_unbound_identifier_is_undefined) {
+    // Env doesn't know the identifier → Undefined propagates.
+    // Hosts treat Undefined as "not ready" (e.g. hide the row until a
+    // real value arrives).
+    cel_test::Registry reg{};   // empty registry
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("missing", expr, err);
+    seam::cel::Value v = seam::cel::evaluate(expr, env);
+    assertTrue(v.isUndefined());
+}
+
+// @-prefixed identifiers
+test(cel_compile_at_prefixed_identifier_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@connected", expr, err);
+    assertTrue(ok);
+    assertEqual((size_t)1, expr.references().size());
+    assertEqual("@connected", expr.references()[0].c_str());    // '@' is part of the name
+}
+
+test(cel_evaluate_at_prefixed_identifier_resolves) {
+    cel_test::Registry reg{{
+        { "@connected", seam::cel::Value::boolean(true) },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("@connected", expr, err);
+    seam::cel::Value v = seam::cel::evaluate(expr, env);
+    assertTrue(v.isBool());
+    assertTrue(v.asBool());
+}
+
+test(cel_evaluate_at_and_bare_are_distinct_namespaces) {
+    // The '@' prefix is part of the identifier name passed to Env; the
+    // resolver sees a different string and can route to host vs param
+    // state. Reserve discipline: a bare "foo" and "@foo" don't collide.
+    cel_test::Registry reg{{
+        { "foo",  seam::cel::Value::number(1.0) },
+        { "@foo", seam::cel::Value::number(2.0) },
+    }};
+    seam::cel::Env env = cel_test::envFor(reg);
+
+    seam::cel::Expression  bare_expr;
+    seam::cel::Expression  at_expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("foo",  bare_expr, err);
+    seam::cel::compile("@foo", at_expr,   err);
+
+    assertNear(1.0, seam::cel::evaluate(bare_expr, env).asNumber(), 1e-9);
+    assertNear(2.0, seam::cel::evaluate(at_expr,   env).asNumber(), 1e-9);
+}
+
+test(cel_compile_at_underscore_prefix_succeeds) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@_internal", expr, err);
+    assertTrue(ok);
+    assertEqual("@_internal", expr.references()[0].c_str());
+}
+
+// Identifiers — malformed
+test(cel_compile_lone_at_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)0, err.position);
+}
+
+test(cel_compile_at_followed_by_at_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@@foo", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)0, err.position);
+}
+
+test(cel_compile_at_followed_by_digit_fails) {
+    // After '@' we need a bare_id which must start with a letter or '_'.
+    // Digits are not valid bare_id starts.
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@0bar", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)0, err.position);
+}
+
+test(cel_compile_identifier_then_garbage_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("foo bar", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)4, err.position);    // 'b'
+}
+
+test(cel_compile_at_identifier_then_garbage_fails) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    bool ok = seam::cel::compile("@foo bar", expr, err);
+    assertFalse(ok);
+    assertEqual((size_t)5, err.position);    // 'b'
+}
+
+// References — populated on success, cleared on failure
+test(cel_compile_failure_leaves_references_empty) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("foo bar", expr, err);   // fails after parsing "foo"
+    assertEqual((size_t)0, expr.references().size());
+    assertTrue(expr.isAlwaysTrue());
+}
+
+test(cel_compile_empty_source_has_no_references) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("", expr, err);
+    assertEqual((size_t)0, expr.references().size());
+}
+
+test(cel_compile_bool_literal_has_no_references) {
+    seam::cel::Expression  expr;
+    seam::cel::CompileError err;
+    seam::cel::compile("true", expr, err);
+    assertEqual((size_t)0, expr.references().size());
+}
+
+// ── Steps 5+ go here ──────────────────────────────────────────

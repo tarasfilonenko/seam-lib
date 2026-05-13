@@ -36,14 +36,17 @@
 //   step 2 ─ boolean literals (true, false)
 //   step 3 ─ number literals (int + decimal, optional leading '-')
 //            string literals with \" \\ \n \t \r escapes
+//   step 4 ─ identifiers (bare + '@'-prefixed) + references tracking
 // ─────────────────────────────────────────────
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "Expression.h"
 #include "detail/Node.h"
@@ -73,6 +76,15 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
         return isAlpha(c) || isDigit(c);
     };
 
+    // References collected during parse; moved into out._references on
+    // success so partially-parsed expressions don't leak refs on error.
+    std::vector<std::string> refs;
+    auto addRef = [&](std::string name) {
+        if (std::find(refs.begin(), refs.end(), name) == refs.end()) {
+            refs.push_back(std::move(name));
+        }
+    };
+
     size_t pos = 0;
     while (pos < source.size() && isSpace(source[pos])) ++pos;
     if (pos == source.size()) {
@@ -96,10 +108,24 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
             node->kind     = detail::Node::Kind::LitBool;
             node->bool_val = false;
         } else {
-            err.position = word_start;
-            err.message  = "unknown identifier";
+            node->kind    = detail::Node::Kind::Identifier;
+            node->str_val = std::string(word);
+            addRef(node->str_val);
+        }
+    }
+    else if (first == '@') {
+        const size_t at_pos = pos;
+        ++pos;
+        // Need a bare_id start (letter or '_') after '@'.
+        if (pos >= source.size() || !isAlpha(source[pos])) {
+            err.position = at_pos;
+            err.message  = "expected identifier after '@'";
             return false;
         }
+        while (pos < source.size() && isAlnum(source[pos])) ++pos;
+        node->kind    = detail::Node::Kind::Identifier;
+        node->str_val = std::string(source.substr(at_pos, pos - at_pos));   // includes '@'
+        addRef(node->str_val);
     }
     else if (startsNumber) {
         const size_t num_start = pos;
@@ -189,7 +215,8 @@ inline bool compile(std::string_view source, Expression &out, CompileError &err)
         return false;
     }
 
-    out._root = std::move(node);
+    out._root       = std::move(node);
+    out._references = std::move(refs);
     return true;
 }
 
