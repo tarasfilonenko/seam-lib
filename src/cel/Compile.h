@@ -73,6 +73,36 @@ struct CompileError {
 
 namespace detail {
 
+// Binary-operator table entry. Used by parseOr / parseAnd / parseCmp
+// via ParseState::tryMatchOp. `is_keyword == true` means the match
+// also requires a word boundary after `text` (so `in` doesn't grab
+// the start of `index`). Symbol operators set `is_keyword == false`.
+struct Op {
+    std::string_view text;
+    Node::Kind       kind;
+    bool             is_keyword;
+};
+
+// Operator tables — one per precedence rung. Order matters: longer
+// ops first so dispatch returns on the most specific match (`<=`
+// before `<`). Adding a new operator at any level is a one-line
+// table entry.
+inline constexpr Op kOrOps[]  = {
+    { "||", Node::Kind::Or,  false },
+};
+inline constexpr Op kAndOps[] = {
+    { "&&", Node::Kind::And, false },
+};
+inline constexpr Op kCmpOps[] = {
+    { "==", Node::Kind::Eq,  false },
+    { "!=", Node::Kind::Neq, false },
+    { "<=", Node::Kind::Le,  false },
+    { ">=", Node::Kind::Ge,  false },
+    { "<",  Node::Kind::Lt,  false },
+    { ">",  Node::Kind::Gt,  false },
+    { "in", Node::Kind::In,  true  },
+};
+
 // Recursive-descent parser carrying source + cursor + outputs. Each
 // grammar production is a method that returns a parsed Node (or
 // nullptr on failure, with the failure recorded in *err). The cursor
@@ -135,6 +165,25 @@ struct ParseState {
         return true;
     }
 
+    // Operator-table dispatch: scans `ops` for the first entry that
+    // matches at the current cursor. Returns a pointer into the table
+    // (caller advances pos by op->text.size()), or nullptr if none
+    // match. Keeps every operator-level parser shaped the same way and
+    // makes adding new operators a one-line table entry.
+    //
+    // Order within each table matters: longer ops MUST come before
+    // their prefix-shorter versions (`<=` before `<`, `>=` before `>`)
+    // because we return on first match.
+    template <size_t N>
+    const Op *tryMatchOp(const Op (&ops)[N]) const noexcept {
+        for (const auto &op : ops) {
+            const bool ok = op.is_keyword ? matchKeyword(op.text)
+                                          : matches(op.text);
+            if (ok) return &op;
+        }
+        return nullptr;
+    }
+
     // ── grammar productions ───────────────────
     //
     // Each returns a Node on success or nullptr on failure (with err
@@ -173,13 +222,14 @@ inline std::unique_ptr<Node> ParseState::parseOr() {
     if (!lhs) return nullptr;
     while (true) {
         skipWhitespace();
-        if (!matches("||")) break;
-        pos += 2;
+        const Op *op = tryMatchOp(kOrOps);
+        if (!op) break;
+        pos += op->text.size();
         skipWhitespace();
         auto rhs = parseAnd();
         if (!rhs) return nullptr;
         auto node  = std::make_unique<Node>();
-        node->kind = Node::Kind::Or;
+        node->kind = op->kind;
         node->lhs  = std::move(lhs);
         node->rhs  = std::move(rhs);
         lhs        = std::move(node);
@@ -197,13 +247,14 @@ inline std::unique_ptr<Node> ParseState::parseAnd() {
     if (!lhs) return nullptr;
     while (true) {
         skipWhitespace();
-        if (!matches("&&")) break;
-        pos += 2;
+        const Op *op = tryMatchOp(kAndOps);
+        if (!op) break;
+        pos += op->text.size();
         skipWhitespace();
         auto rhs = parseCmp();
         if (!rhs) return nullptr;
         auto node  = std::make_unique<Node>();
-        node->kind = Node::Kind::And;
+        node->kind = op->kind;
         node->lhs  = std::move(lhs);
         node->rhs  = std::move(rhs);
         lhs        = std::move(node);
@@ -214,7 +265,7 @@ inline std::unique_ptr<Node> ParseState::parseAnd() {
 // ── cmp_expr ──────────────────────────────────
 //
 // cmp_expr := not_expr ( op not_expr )?
-//   where op ∈ { ==, !=, <, <=, >, >= }   (in: step 10)
+//   where op ∈ { ==, !=, <, <=, >, >=, in }
 //
 // Non-chainable: at most one comparison per cmp_expr. `a == b == c`
 // errors; grouping via parens (`(a == b) == c`) is fine.
@@ -222,25 +273,14 @@ inline std::unique_ptr<Node> ParseState::parseCmp() {
     auto lhs = parseNot();
     if (!lhs) return nullptr;
     skipWhitespace();
-
-    // Two-char ops checked before single-char so "<=" doesn't get split.
-    // 'in' uses matchKeyword so we don't grab the start of `index` etc.
-    Node::Kind op_kind;
-    if      (matches("=="))      { op_kind = Node::Kind::Eq;  pos += 2; }
-    else if (matches("!="))      { op_kind = Node::Kind::Neq; pos += 2; }
-    else if (matches("<="))      { op_kind = Node::Kind::Le;  pos += 2; }
-    else if (matches(">="))      { op_kind = Node::Kind::Ge;  pos += 2; }
-    else if (peek() == '<')      { op_kind = Node::Kind::Lt;  ++pos;    }
-    else if (peek() == '>')      { op_kind = Node::Kind::Gt;  ++pos;    }
-    else if (matchKeyword("in")) { op_kind = Node::Kind::In;  pos += 2; }
-    else                         { return lhs; }
-
+    const Op *op = tryMatchOp(kCmpOps);
+    if (!op) return lhs;
+    pos += op->text.size();
     skipWhitespace();
     auto rhs = parseNot();
     if (!rhs) return nullptr;
-
     auto node  = std::make_unique<Node>();
-    node->kind = op_kind;
+    node->kind = op->kind;
     node->lhs  = std::move(lhs);
     node->rhs  = std::move(rhs);
     return node;
