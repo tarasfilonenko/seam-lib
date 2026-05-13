@@ -17,3 +17,4 @@
 #include "cel/number.h"
 #include "cel/string.h"
 #include "cel/identifier.h"
+#include "cel/paren.h"
