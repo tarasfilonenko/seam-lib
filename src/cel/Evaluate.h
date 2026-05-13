@@ -34,7 +34,15 @@
 namespace seam {
 namespace cel {
 
-Value evaluate(const Expression &expression, const Env &env);
+inline Value evaluate(const Expression &expression, const Env & /*env*/) {
+    if (expression.isAlwaysTrue()) {
+        return Value::boolean(true);
+    }
+    // AST-walking arrives with the parser. Until then any non-empty
+    // expression is unreachable here (compile() refuses non-empty source
+    // until each grammar feature is implemented).
+    return Value::undefined();
+}
 
 } // namespace cel
 } // namespace seam

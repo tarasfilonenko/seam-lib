@@ -15,25 +15,39 @@
 //                                                Undefined if any referenced
 //                                                identifier is unbound).
 //
-// An empty Expression (default-constructed, or compiled from "") evaluates
-// to Value::boolean(true). caps fields use empty == "always" semantics, so
-// callers can compile() every visible_expr/enabled_expr uniformly without
-// special-casing the empty case.
+// An empty Expression (default-constructed, or compiled from "" / pure
+// whitespace) evaluates to Value::boolean(true). caps fields use empty ==
+// "always" semantics, so callers can compile() every visible_expr /
+// enabled_expr uniformly without special-casing the empty case.
 //
 // Move-only. Cheap to move, expensive to copy — copy is intentionally
 // disabled to keep ownership of the underlying AST unambiguous.
+//
+// AST ownership is via raw owning pointer rather than std::unique_ptr.
+// This is deliberate: on libstdc++ for ESP32, <memory> transitively pulls
+// in <atomic>, whose std::atomic_flag::test() method collides with the
+// AUnit `test()` macro used in this library's own test sketch. The rest
+// of seam-lib avoids <memory> for the same reason. Raw ownership keeps
+// the public header AUnit-safe.
 // ─────────────────────────────────────────────
 
-#include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace seam {
 namespace cel {
 
+class Value;
+struct Env;
+struct CompileError;
+
+namespace detail { struct Node; }
+
 class Expression {
 public:
-    Expression();                                   // empty → always true
+    Expression() noexcept = default;
     ~Expression();
 
     Expression(Expression &&) noexcept;
@@ -42,24 +56,56 @@ public:
     Expression(const Expression &) = delete;
     Expression &operator=(const Expression &) = delete;
 
-    // True when this expression was compiled from an empty source string
-    // (or default-constructed). Such expressions evaluate to true.
-    bool isAlwaysTrue() const;
+    // True when no AST is attached: the expression came from empty / pure
+    // whitespace source, or was default-constructed. Always-true expressions
+    // evaluate to Value::boolean(true).
+    bool isAlwaysTrue() const noexcept { return _root == nullptr; }
 
     // Unordered, de-duplicated list of identifiers this expression reads.
-    // Stable across the Expression's lifetime — safe to take pointers/refs
-    // into it for reverse-dependency indices.
-    const std::vector<std::string> &references() const;
+    // Empty for always-true expressions. Stable across the Expression's
+    // lifetime — safe to take pointers/refs into it for reverse-dep indices.
+    const std::vector<std::string> &references() const noexcept { return _references; }
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> _impl;
+    detail::Node             *_root = nullptr;   // owning, null ⇒ always-true
+    std::vector<std::string>  _references;
 
-    // Friend access so compile()/evaluate() can populate / inspect Impl
-    // without leaking AST internals into the public header.
-    friend class CompileAccess;
-    friend class EvaluateAccess;
+    // compile() builds _root / _references; evaluate() walks _root.
+    friend bool  compile(std::string_view, Expression &, CompileError &);
+    friend Value evaluate(const Expression &, const Env &);
 };
+
+} // namespace cel
+} // namespace seam
+
+// detail::Node must be a complete type before the inline special-member
+// definitions below can `delete` it. Pull it in here so the dtor + move
+// definitions see a complete type.
+#include "detail/Node.h"
+
+namespace seam {
+namespace cel {
+
+inline Expression::~Expression() {
+    delete _root;
+}
+
+inline Expression::Expression(Expression &&other) noexcept
+    : _root(other._root)
+    , _references(std::move(other._references))
+{
+    other._root = nullptr;
+}
+
+inline Expression &Expression::operator=(Expression &&other) noexcept {
+    if (this != &other) {
+        delete _root;
+        _root        = other._root;
+        other._root  = nullptr;
+        _references  = std::move(other._references);
+    }
+    return *this;
+}
 
 } // namespace cel
 } // namespace seam

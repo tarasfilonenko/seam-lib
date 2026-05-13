@@ -38,7 +38,7 @@ expr       := or_expr
 or_expr    := and_expr ( "||" and_expr )*
 and_expr   := not_expr ( "&&" not_expr )*
 not_expr   := "!" not_expr | cmp_expr
-cmp_expr   := primary ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) primary )?
+cmp_expr   := primary ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) primary )?
 primary    := number | string | "true" | "false" | identifier | "(" expr ")"
 identifier := bare_id | "@" bare_id
 bare_id    := [A-Za-z_][A-Za-z0-9_]*
@@ -50,6 +50,32 @@ Bare identifiers resolve to caps param ids. `@`-prefixed identifiers are
 reserved for host-provided state (e.g. `@connected`, `@preset_index`).
 The grammar reserves the prefix even though no `@`-vars are emitted yet —
 adding them later won't break older docks.
+
+### `in` operator
+
+`item in container` tests membership against a space-separated token list,
+mirroring how `caps::Param::flags` and `caps::Param::options` already
+encode their values. Both operands must be strings:
+
+```
+"chan_a" in enabled_channels       // enabled_channels = "chan_a chan_b" → true
+"chan_z" in enabled_channels       // → false
+"chan_a" in ""                     // → false (no tokens)
+```
+
+If either operand is non-string, the result is Undefined. Tokens are
+delimited by runs of ASCII whitespace; leading/trailing whitespace and
+empty tokens are ignored.
+
+Real modules emit expressions like:
+
+```
+"{{CHANNEL_PREFIX}}" in enabled_channels
+```
+
+where `{{CHANNEL_PREFIX}}` is module-side template substitution that
+happens **before** the string reaches cel. cel only sees the final
+result (e.g. `"chan_a" in enabled_channels`).
 
 ## Semantics
 

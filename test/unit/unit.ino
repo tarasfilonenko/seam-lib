@@ -8,6 +8,7 @@
 #include "protocol/Serializer.h"
 #include "protocol/wire/Event.h"
 #include "protocol/caps/Caps.h"
+#include "cel/cel.h"
 
 using namespace seam::protocol;
 using namespace seam::protocol::wire;
@@ -27,6 +28,7 @@ std::optional<wire::Event> feedAndTake(Parser& p, const char* input) {
 #include "test_caps.h"
 #include "test_interleave.h"
 #include "test_recovery.h"
+#include "test_cel.h"
 
 // ── Entry point ───────────────────────────────
 
