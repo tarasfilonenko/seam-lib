@@ -21,3 +21,4 @@
 #include "cel/not.h"
 #include "cel/cmp.h"
 #include "cel/logic.h"
+#include "cel/in.h"

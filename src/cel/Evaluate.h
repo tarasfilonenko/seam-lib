@@ -18,6 +18,10 @@
 //                 false  absorbs in &&  → false even if other is Undef/non-bool
 //                 true   absorbs in ||  → true  even if other is Undef/non-bool
 //              Non-absorbing combinations of non-bool / Undefined → Undefined.
+//   - 'in' is string-only: `item in container` where both operands are
+//              String. Container is split on whitespace; returns true if
+//              item appears as one of the tokens. Non-string operand on
+//              either side → Undefined.
 //   - The evaluator is total: no exceptions, no UB on bad input. Bad
 //     runtime types collapse to Undefined and callers wrap evaluate()
 //     in tight loops without try/catch overhead.
@@ -45,6 +49,26 @@ namespace cel {
 
 namespace detail {
 
+// Whitespace-tokenised membership test. Both args are string_views;
+// returns true if `item` appears as one of the whitespace-delimited
+// tokens of `tokens`. Empty `item` never matches (no empty tokens by
+// construction).
+inline bool stringInTokens(std::string_view item, std::string_view tokens) {
+    auto isSpace = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    size_t i = 0;
+    while (i < tokens.size()) {
+        while (i < tokens.size() && isSpace(tokens[i])) ++i;
+        const size_t start = i;
+        while (i < tokens.size() && !isSpace(tokens[i])) ++i;
+        if (i > start && tokens.substr(start, i - start) == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Evaluate a binary comparison given already-resolved operand Values.
 // Centralises the type-strict rules so the recursive walker stays
 // readable.
@@ -67,6 +91,14 @@ inline Value evalCmp(Node::Kind op, const Value &l, const Value &r) {
             default:                  return Value::undefined();   // unreachable
         }
         return Value::boolean(op == Node::Kind::Eq ? equal : !equal);
+    }
+
+    // 'in': string-only, whitespace-tokenised right operand.
+    if (op == Node::Kind::In) {
+        if (!l.isString() || !r.isString()) {
+            return Value::undefined();
+        }
+        return Value::boolean(stringInTokens(l.asString(), r.asString()));
     }
 
     // Ordering: both must be Number. Anything else → Undefined.
@@ -107,7 +139,8 @@ inline Value evaluateNode(const Node *node, const Env &env) {
         case Node::Kind::Lt:
         case Node::Kind::Le:
         case Node::Kind::Gt:
-        case Node::Kind::Ge: {
+        case Node::Kind::Ge:
+        case Node::Kind::In: {
             Value l = evaluateNode(node->lhs.get(), env);
             Value r = evaluateNode(node->rhs.get(), env);
             return evalCmp(node->kind, l, r);

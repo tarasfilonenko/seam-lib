@@ -47,6 +47,8 @@
 //            with error absorption: false absorbs in &&, true absorbs
 //            in ||, anything else with a non-bool operand → Undefined).
 //            && binds tighter than ||.
+//   step 9 ─ membership 'in' (keyword operator at cmp_expr precedence;
+//            string-only; rhs is space-tokenised).
 // ─────────────────────────────────────────────
 
 #include <algorithm>
@@ -117,6 +119,19 @@ struct ParseState {
         for (size_t i = 0; i < s.size(); ++i) {
             if (source[pos + i] != s[i]) return false;
         }
+        return true;
+    }
+
+    // Like matches(), but only succeeds if the character immediately
+    // after the keyword is NOT an identifier-continuation char. Used for
+    // letter-based operators ('in') that would otherwise be confused
+    // with identifiers like `index` or `inversion`. Symbol operators
+    // (==, <=, &&, …) don't need this — their chars aren't valid in
+    // identifiers, so plain matches() is unambiguous.
+    bool matchKeyword(std::string_view kw) const noexcept {
+        if (!matches(kw)) return false;
+        const size_t after = pos + kw.size();
+        if (after < source.size() && isAlnum(source[after])) return false;
         return true;
     }
 
@@ -209,14 +224,16 @@ inline std::unique_ptr<Node> ParseState::parseCmp() {
     skipWhitespace();
 
     // Two-char ops checked before single-char so "<=" doesn't get split.
+    // 'in' uses matchKeyword so we don't grab the start of `index` etc.
     Node::Kind op_kind;
-    if      (matches("==")) { op_kind = Node::Kind::Eq;  pos += 2; }
-    else if (matches("!=")) { op_kind = Node::Kind::Neq; pos += 2; }
-    else if (matches("<=")) { op_kind = Node::Kind::Le;  pos += 2; }
-    else if (matches(">=")) { op_kind = Node::Kind::Ge;  pos += 2; }
-    else if (peek() == '<') { op_kind = Node::Kind::Lt;  ++pos;    }
-    else if (peek() == '>') { op_kind = Node::Kind::Gt;  ++pos;    }
-    else                    { return lhs; }
+    if      (matches("=="))      { op_kind = Node::Kind::Eq;  pos += 2; }
+    else if (matches("!="))      { op_kind = Node::Kind::Neq; pos += 2; }
+    else if (matches("<="))      { op_kind = Node::Kind::Le;  pos += 2; }
+    else if (matches(">="))      { op_kind = Node::Kind::Ge;  pos += 2; }
+    else if (peek() == '<')      { op_kind = Node::Kind::Lt;  ++pos;    }
+    else if (peek() == '>')      { op_kind = Node::Kind::Gt;  ++pos;    }
+    else if (matchKeyword("in")) { op_kind = Node::Kind::In;  pos += 2; }
+    else                         { return lhs; }
 
     skipWhitespace();
     auto rhs = parseNot();

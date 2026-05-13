@@ -49,6 +49,9 @@ struct Node {
         // absorbs in &&, true absorbs in ||.
         And,    // &&
         Or,     // ||
+        // Membership (binary). String-only: lhs in rhs where rhs is
+        // treated as a space-separated token list.
+        In,     // in
     };
 
     Kind        kind     = Kind::LitBool;
