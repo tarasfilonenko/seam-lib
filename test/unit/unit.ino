@@ -3,6 +3,15 @@
 // ─────────────────────────────────────────────
 
 #include <Arduino.h>
+
+// <atomic> declares std::atomic_flag::test(), and AUnit's `test()` macro
+// (defined by <AUnit.h>) mangles every later occurrence of `test(` in the
+// translation unit. Pull <atomic> in here — before AUnit — so it gets a
+// chance to declare its members cleanly. seam-lib headers that include
+// <memory> (e.g. cel/Expression.h) transitively pull <atomic>, so this
+// also covers them as long as AUnit comes after.
+#include <atomic>
+
 #include <AUnit.h>
 #include "protocol/Parser.h"
 #include "protocol/Serializer.h"
